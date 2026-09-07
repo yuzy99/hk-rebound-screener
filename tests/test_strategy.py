@@ -146,7 +146,8 @@ def test_notifier_markdown_report_and_step_summary(tmp_path: Path, monkeypatch) 
     report = format_markdown_report(result, market="HK", asof="2026-09-02", config=config)
     assert "00700" in report
     assert "市场选股简报" in report
-    assert "| 代码 | 名称 |" in report
+    assert "01." in report
+    assert "所属行业" in report
 
     summary_file = tmp_path / "step_summary.md"
     monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary_file))

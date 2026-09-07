@@ -42,14 +42,14 @@ def format_markdown_report(
         ])
         return "\n".join(lines)
 
-    lines.append("| 代码 | 名称 | 行业 | 最新价 | 前序跌幅 | 当日涨幅 | 行业均值 | 滞涨差值 | 异常量比 | 综合分 |")
-    lines.append("| :--- | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |")
+    lines.append("---")
+    lines.append("")
 
-    for _, row in passed.iterrows():
+    for rank, (_, row) in enumerate(passed.iterrows(), start=1):
         code = str(row.get("code", "")).strip()
         name = str(row.get("name", "")).strip()
         industry = str(row.get("industry", "")).strip()
-        close = f"{float(row['close']):.2f} {currency}" if pd.notna(row.get("close")) else "-"
+        close = f"{float(row['close']):.3f}".rstrip("0").rstrip(".") + f" {currency}" if pd.notna(row.get("close")) else "-"
         prior_ret = f"{float(row['prior_return_pct']):+.2f}%" if pd.notna(row.get("prior_return_pct")) else "-"
         daily_ret = f"{float(row['daily_return_pct']):+.2f}%" if pd.notna(row.get("daily_return_pct")) else "-"
         ind_avg = f"{float(row['industry_avg_return_pct']):+.2f}%" if pd.notna(row.get("industry_avg_return_pct")) else "-"
@@ -57,13 +57,20 @@ def format_markdown_report(
         vol_ratio = f"{float(row['volume_ratio']):.2f}x" if pd.notna(row.get("volume_ratio")) else "-"
         score = f"{float(row['score']):.2f}" if pd.notna(row.get("score")) else "-"
 
-        lines.append(
-            f"| `{code}` | {name} | {industry} | {close} | {prior_ret} | {daily_ret} | {ind_avg} | {lag} | {vol_ratio} | **{score}** |"
-        )
+        # 手机端卡片式设计，彻底杜绝竖屏列挤压
+        lines.extend([
+            f"### {rank:02d}. `{code}` {name}",
+            f"> 🏢 **所属行业**：{industry}",
+            f"> 💰 **最新收盘**：`{close}`（当日 `{daily_ret}`）",
+            f"> 📉 **前序跌幅**：`{prior_ret}` ｜ **行业均值**：`{ind_avg}`",
+            f"> 🎯 **相对滞涨**：`{lag}` ｜ **异动量比**：`{vol_ratio}`",
+            f"> ⭐ **综合得分**：**{score}**",
+            "",
+            "---",
+            "",
+        ])
 
-    lines.append("")
-    lines.append("> [!TIP]")
-    lines.append("> 以上结果基于量化技术面及 48 小时舆情排雷初筛，不构成投资建议；建议结合基本面公告进一步核对。")
+    lines.append("> 💡 *提示：以上结果基于量化技术面及 48 小时舆情排雷初筛，不构成投资建议。*")
     lines.append("")
     return "\n".join(lines)
 
