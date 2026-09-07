@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 import os
@@ -95,8 +95,43 @@ def send_webhook_notification(
     url = url.strip()
     headers = {"Content-Type": "application/json"}
 
+    # PushPlus (微信直推)
+    if "pushplus.plus" in url or (not url.startswith("http://") and not url.startswith("https://")):
+        token = url
+        if "token=" in url:
+            from urllib.parse import parse_qs, urlparse
+            parsed = urlparse(url)
+            token = parse_qs(parsed.query).get("token", [token])[0]
+        elif "/" in token:
+            token = token.rstrip("/").split("/")[-1]
+
+        target_url = "http://www.pushplus.plus/send"
+        payload = {
+            "token": token,
+            "title": title,
+            "content": content,
+            "template": "markdown",
+        }
+        try:
+            response = requests.post(target_url, json=payload, headers=headers, timeout=15)
+            if response.status_code == 200:
+                print("PushPlus 微信通知发送成功")
+                return True
+            print(f"WARN PushPlus 响应异常: HTTP {response.status_code}, 内容: {response.text[:200]}")
+            return False
+        except Exception as error:
+            print(f"WARN PushPlus 发送失败: {error}")
+            return False
+
+    # Bark (iOS 原生通知)
+    if "api.day.app" in url:
+        payload = {
+            "title": title,
+            "body": content,
+            "group": "StockScreener",
+        }
     # 企业微信机器人
-    if "qyapi.weixin.qq.com" in url:
+    elif "qyapi.weixin.qq.com" in url:
         payload = {
             "msgtype": "markdown",
             "markdown": {"content": content},
@@ -142,3 +177,4 @@ def send_webhook_notification(
     except Exception as error:
         print(f"WARN Webhook 发送失败: {error}")
         return False
+
