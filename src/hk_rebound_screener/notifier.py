@@ -128,6 +128,41 @@ def _format_pb(val: Any) -> str:
         return "-"
 
 
+US_COMMON_NAMES: dict[str, str] = {
+    "AAPL": "苹果 (Apple)",
+    "MSFT": "微软 (Microsoft)",
+    "NVDA": "英伟达 (NVIDIA)",
+    "AMZN": "亚马逊 (Amazon)",
+    "GOOGL": "谷歌A (Alphabet)",
+    "GOOG": "谷歌C (Alphabet)",
+    "META": "Meta (脸书)",
+    "TSLA": "特斯拉 (Tesla)",
+    "AMD": "超威半导体 (AMD)",
+    "INTC": "英特尔 (Intel)",
+    "QCOM": "高通 (Qualcomm)",
+    "BABA": "阿里巴巴 (Alibaba)",
+    "PDD": "拼多多 (PDD)",
+    "JD": "京东 (JD.com)",
+    "BIDU": "百度 (Baidu)",
+    "NIO": "蔚来 (NIO)",
+    "XPEV": "小鹏汽车 (XPeng)",
+    "LI": "理想汽车 (Li Auto)",
+    "NFLX": "奈飞 (Netflix)",
+    "DIS": "迪士尼 (Disney)",
+}
+
+
+def _clean_stock_name(code: str, raw_name: str, market: str) -> str:
+    code_upper = code.upper()
+    if market.upper() == "US" and code_upper in US_COMMON_NAMES:
+        return US_COMMON_NAMES[code_upper]
+    name = str(raw_name).strip()
+    for suffix in [" - Common Stock", " Common Stock", ", Inc.", " Inc.", " Corp.", " Corporation", " Ltd.", " Limited", " plc"]:
+        if name.endswith(suffix):
+            name = name[:-len(suffix)].strip()
+    return name
+
+
 def format_markdown_report(
     result: pd.DataFrame,
     market: str,
@@ -166,7 +201,7 @@ def format_markdown_report(
 
     for rank, (_, row) in enumerate(passed.iterrows(), start=1):
         code = str(row.get("code", "")).strip()
-        name = str(row.get("name", "")).strip()
+        name = _clean_stock_name(code, row.get("name", ""), market)
         raw_industry = str(row.get("industry", "")).strip()
         industry = _translate_industry(raw_industry)
         close = f"{float(row['close']):.3f}".rstrip("0").rstrip(".") + f" {currency}" if pd.notna(row.get("close")) else "-"
