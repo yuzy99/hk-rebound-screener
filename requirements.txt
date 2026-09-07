@@ -1,0 +1,3 @@
+akshare>=1.18.94
+pandas>=2.2
+yfinance>=1.6.0

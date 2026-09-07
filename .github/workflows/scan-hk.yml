@@ -1,0 +1,95 @@
+﻿name: HK full-market scan
+
+run-name: HK full-market scan (${{ github.event_name }})
+
+on:
+  # GitHub Actions cron uses UTC. 08:30 UTC = 16:30 Asia/Taipei,
+  # after the regular Hong Kong session has closed.
+  schedule:
+    - cron: "30 8 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      config_file:
+        description: "选择港股筛选策略"
+        required: false
+        default: "config.json (经典超跌反弹)"
+        type: choice
+        options:
+          - "config.json (经典超跌反弹)"
+          - "config.hk.two_day_drop.json (双日下跌+流动性)"
+      refresh_metadata:
+        description: "重新建立港股行业元数据缓存"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hk-full-market-scan
+  cancel-in-progress: false
+
+env:
+  TZ: Asia/Taipei
+  PYTHONUNBUFFERED: "1"
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Prepare and restore market-data caches
+        uses: actions/cache@v4
+        with:
+          path: |
+            data/cache
+            ~/.cache/py-yfinance
+          key: ${{ runner.os }}-hk-market-cache-${{ github.run_id }}
+          restore-keys: |
+            ${{ runner.os }}-hk-market-cache-
+
+      - name: Install runtime dependencies
+        run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt
+
+      - name: Run HK full-market strategy
+        env:
+          PYTHONPATH: src
+          NOTIFICATION_WEBHOOK: ${{ secrets.NOTIFICATION_WEBHOOK }}
+        run: |
+          CONFIG_FILE="config.json"
+          if [[ "${{ inputs.config_file }}" =~ "two_day_drop" ]]; then
+            CONFIG_FILE="config.hk.two_day_drop.json"
+          fi
+          echo "Using config file: $CONFIG_FILE"
+
+          args=(
+            --mode live
+            --full-market
+            --config "$CONFIG_FILE"
+            --metadata-cache data/cache/hk_industry.csv
+            --output-dir outputs
+          )
+          if [ "${{ inputs.refresh_metadata }}" = "true" ]; then
+            args+=(--refresh-metadata)
+          fi
+          python -m hk_rebound_screener.main "${args[@]}"
+
+      - name: Upload HK scan CSV
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hk-scan-${{ github.run_number }}
+          path: outputs/*.csv
+          if-no-files-found: warn
+          retention-days: 14

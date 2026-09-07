@@ -1,0 +1,33 @@
+{
+  "market": "HK",
+  "price_adjust": "",
+  "history_days": 30,
+  "volume_lookback": 3,
+  "news_lookback_hours": 48,
+  "min_industry_peers": 2,
+  "max_lot_value_hkd": 30000,
+  "prior_drop_max_pct": -5.0,
+  "industry_mean_min_pct": 1.0,
+  "lag_min_pct": 2.0,
+  "today_return_max_pct": 0.0,
+  "negative_news_threshold": 5.0,
+  "strict_lot_size": true,
+  "strict_news_fetch": true,
+  "top_n": 20,
+  "score_weights": {
+    "prior_drop_abs": 1.0,
+    "lag": 1.0,
+    "volume_anomaly": 1.0,
+    "negative_news": 1.0
+  },
+  "news_rules": {
+    "profit_warning": {"weight": 5.0, "terms": ["盈利预警", "盈警", "预亏", "profit warning"]},
+    "placement_rights_issue": {"weight": 5.0, "terms": ["配股", "供股", "配售", "rights issue", "placing"]},
+    "shareholder_sell_down": {"weight": 5.0, "terms": ["减持", "出售股份", "股东出售", "sell-down", "sell down"]},
+    "regulatory_penalty": {"weight": 5.0, "terms": ["监管处罚", "被罚", "监管调查", "regulatory penalty"]},
+    "suspension_resumption": {"weight": 5.0, "terms": ["停牌", "复牌", "suspension", "resumption"]},
+    "major_litigation": {"weight": 5.0, "terms": ["重大诉讼", "重大仲裁", "major litigation"]},
+    "major_customer_loss": {"weight": 5.0, "terms": ["重大客户流失", "失去主要客户", "客户流失", "customer loss"]}
+  }
+}
+

@@ -1,0 +1,34 @@
+{
+  "market": "US",
+  "currency": "USD",
+  "auto_adjust": true,
+  "history_days": 30,
+  "volume_lookback": 3,
+  "news_lookback_hours": 48,
+  "min_industry_peers": 2,
+  "max_lot_value_hkd": 30000,
+  "usd_hkd_rate": 7.84,
+  "prior_drop_max_pct": -5.0,
+  "industry_mean_min_pct": 1.0,
+  "lag_min_pct": 2.0,
+  "today_return_max_pct": 0.0,
+  "negative_news_threshold": 5.0,
+  "strict_lot_size": true,
+  "strict_news_fetch": true,
+  "top_n": 20,
+  "score_weights": {
+    "prior_drop_abs": 1.0,
+    "lag": 1.0,
+    "volume_anomaly": 1.0,
+    "negative_news": 1.0
+  },
+  "news_rules": {
+    "profit_warning": {"weight": 5.0, "terms": ["profit warning", "lower earnings"]},
+    "placement_rights_issue": {"weight": 5.0, "terms": ["rights offering", "secondary offering"]},
+    "shareholder_sell_down": {"weight": 5.0, "terms": ["insider selling", "stake sale"]},
+    "regulatory_penalty": {"weight": 5.0, "terms": ["regulatory penalty", "sec investigation"]},
+    "suspension_resumption": {"weight": 5.0, "terms": ["trading halt", "delisting notice"]},
+    "major_litigation": {"weight": 5.0, "terms": ["major litigation", "class action"]},
+    "major_customer_loss": {"weight": 5.0, "terms": ["loss of major customer", "customer termination"]}
+  }
+}

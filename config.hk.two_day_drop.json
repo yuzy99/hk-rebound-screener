@@ -1,0 +1,58 @@
+{
+  "market": "HK",
+  "strategy_mode": "two_day_drop",
+  "price_adjust": "",
+  "history_days": 120,
+  "volume_lookback": 20,
+  "news_lookback_hours": 48,
+  "min_industry_peers": 2,
+  "max_lot_value_hkd": 30000,
+  "large_drop_max_pct": -5.0,
+  "industry_mean_min_pct": 1.0,
+  "lag_min_pct": 2.0,
+  "negative_news_threshold": 5.0,
+  "strict_lot_size": true,
+  "strict_news_fetch": true,
+  "top_n": 20,
+  "liquidity_filter": {
+    "min_current_turnover": 2000000,
+    "min_prior_median_turnover": 2000000,
+    "min_traded_days": 15
+  },
+  "score_weights": {
+    "drop_strength": 1.0,
+    "lag": 1.0,
+    "volume_anomaly": 1.0,
+    "negative_news": 1.0
+  },
+  "news_rules": {
+    "profit_warning": {
+      "weight": 5.0,
+      "terms": ["盈利预警", "盈警", "预亏", "盈警公告", "利润预警", "profit warning", "profit alert"]
+    },
+    "placement_rights_issue": {
+      "weight": 5.0,
+      "terms": ["配股", "供股", "配售", "rights issue", "placing", "placement"]
+    },
+    "shareholder_sell_down": {
+      "weight": 5.0,
+      "terms": ["减持", "出售股份", "股东出售", "sell-down", "sell down"]
+    },
+    "regulatory_penalty": {
+      "weight": 5.0,
+      "terms": ["监管处罚", "纪律处分", "被罚", "监管调查", "regulatory penalty", "regulatory investigation"]
+    },
+    "suspension_resumption": {
+      "weight": 5.0,
+      "terms": ["停牌", "复牌", "suspension", "resumption"]
+    },
+    "major_litigation": {
+      "weight": 5.0,
+      "terms": ["重大诉讼", "重大仲裁", "诉讼金额", "major litigation", "major lawsuit"]
+    },
+    "major_customer_loss": {
+      "weight": 5.0,
+      "terms": ["重大客户流失", "失去主要客户", "客户流失", "loss of major customer", "customer loss"]
+    }
+  }
+}
