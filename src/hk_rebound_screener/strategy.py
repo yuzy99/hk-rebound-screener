@@ -265,16 +265,27 @@ def evaluate_signal(
             )
         )
 
+    large_drop_max_pct = float(config.get("large_drop_max_pct", config.get("prior_drop_max_pct", -5.0)))
+    other_day_max_pct = float(config.get("other_day_return_max_pct", config.get("today_return_max_pct", 0.5)))
+
+    # 两日内任一日大跌且另一日涨幅 <= other_day_max_pct (默认0.5%)
+    drop_yesterday = (result["prior_return_pct"] <= large_drop_max_pct) & (result["daily_return_pct"] <= other_day_max_pct)
+    drop_today = (result["daily_return_pct"] <= large_drop_max_pct) & (result["prior_return_pct"] <= other_day_max_pct)
+    result["two_day_drop_ok"] = drop_yesterday | drop_today
+    result["drop_strength_pct"] = result[["prior_return_pct", "daily_return_pct"]].min(axis=1).abs()
+
     weights = config.get("score_weights", {})
+    drop_weight = float(weights.get("drop_strength", weights.get("prior_drop_abs", 1.0)))
     result["score"] = (
-        float(weights.get("prior_drop_abs", 1.0)) * result["prior_return_pct"].abs()
+        drop_weight * result["drop_strength_pct"]
         + float(weights.get("lag", 1.0)) * result["lag_vs_industry_pct"]
         + float(weights.get("volume_anomaly", 1.0)) * result["volume_anomaly"].fillna(0.0)
         - float(weights.get("negative_news", 1.0)) * result["negative_news_score"]
     )
 
     if strategy_mode == "two_day_drop":
-        result["drop_strength_pct"] = result[["prior_return_pct", "two_days_ago_return_pct"]].abs().max(axis=1)
+        # 兼容旧两日前前交易日跌幅
+        result["drop_strength_pct"] = result[["prior_return_pct", "daily_return_pct", "two_days_ago_return_pct"]].min(axis=1).abs()
         result["score"] = (
             float(weights.get("drop_strength", 1.0)) * result["drop_strength_pct"]
             + float(weights.get("lag", 1.0)) * result["lag_vs_industry_pct"]
@@ -303,8 +314,8 @@ def evaluate_signal(
         min_prior_median_turnover = float(liquidity.get("min_prior_median_turnover", 0.0))
         min_traded_days = int(liquidity.get("min_traded_days", 0))
         result["large_drop_ok"] = (
-            (result["prior_return_pct"] <= float(config["large_drop_max_pct"]))
-            | (result["two_days_ago_return_pct"] <= float(config["large_drop_max_pct"]))
+            (result["prior_return_pct"] <= float(config.get("large_drop_max_pct", -5.0)))
+            | (result["two_days_ago_return_pct"] <= float(config.get("large_drop_max_pct", -5.0)))
         )
         result["consecutive_down_ok"] = (
             (result["prior_return_pct"] < 0.0) & (result["daily_return_pct"] < 0.0)
@@ -327,20 +338,20 @@ def evaluate_signal(
     else:
         result["passes"] = (
             common_filters
-            & (result["prior_return_pct"] <= float(config["prior_drop_max_pct"]))
+            & result["two_day_drop_ok"]
             & (
-                (result["daily_return_pct"] <= float(config["today_return_max_pct"]))
+                (result["daily_return_pct"] <= other_day_max_pct)
                 | (result["lag_vs_industry_pct"] >= float(config["lag_min_pct"]))
             )
         )
     columns = [
         "code", "name", "industry", "close", "lot_size", "lot_value_hkd", "prior_return_pct",
-        "daily_return_pct", "industry_avg_return_pct", "lag_vs_industry_pct", "peer_count",
+        "daily_return_pct", "drop_strength_pct", "two_day_drop_ok", "industry_avg_return_pct", "lag_vs_industry_pct", "peer_count",
         "volume_ratio", "volume_anomaly", "negative_news_score", "negative_news_hits", "news_fetch_ok", "usd_hkd_rate", "score", "passes",
     ]
     if strategy_mode == "two_day_drop":
         columns.extend([
-            "two_days_ago_return_pct", "drop_strength_pct", "turnover", "prior_turnover_median",
+            "two_days_ago_return_pct", "turnover", "prior_turnover_median",
             "prior_traded_days", "large_drop_ok", "consecutive_down_ok", "liquidity_ok",
         ])
     if lot_value_column not in columns:

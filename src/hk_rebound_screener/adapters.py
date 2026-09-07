@@ -581,3 +581,35 @@ def build_us_live_prices(
     prices = pd.concat([history, live_rows], ignore_index=True)
     prices = prices.drop_duplicates(["date", "code"], keep="last").sort_values(["code", "date"])
     return prices.reset_index(drop=True), spot
+
+
+def enrich_candidate_fundamentals(codes: list[str], market: str) -> pd.DataFrame:
+    """批量或按需为初筛通过的候选股获取总市值、PE与PB指标。"""
+    import yfinance as yf
+
+    rows: list[dict[str, Any]] = []
+    for code in codes:
+        symbol = _yahoo_symbol(code, market)
+        norm_code = normalize_code(code)
+        market_cap = None
+        pe = None
+        pb = None
+        try:
+            ticker = yf.Ticker(symbol)
+            fast = getattr(ticker, "fast_info", None)
+            if fast:
+                market_cap = getattr(fast, "market_cap", None)
+            info = getattr(ticker, "info", {}) or {}
+            if not market_cap:
+                market_cap = info.get("marketCap")
+            pe = info.get("trailingPE") or info.get("forwardPE")
+            pb = info.get("priceToBook")
+        except Exception as error:  # noqa: BLE001
+            print(f"WARN 获取估值指标失败 {symbol}: {error}")
+        rows.append({
+            "code": norm_code,
+            "market_cap": market_cap,
+            "pe": pe,
+            "pb": pb,
+        })
+    return pd.DataFrame(rows)

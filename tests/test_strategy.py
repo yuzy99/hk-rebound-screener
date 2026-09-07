@@ -154,4 +154,55 @@ def test_notifier_markdown_report_and_step_summary(tmp_path: Path, monkeypatch) 
     assert write_step_summary(report)
     assert summary_file.exists()
     assert "00700" in summary_file.read_text(encoding="utf-8")
+    assert "PE / PB 极速参考" in report
+    assert "<10" in report
+    assert "<1.0" in report
+
+
+def test_two_day_drop_any_day_logic() -> None:
+    """测试新策略：近两天内任一天大跌 <= -5%，另一天涨幅 <= 0.5% 均可通过。"""
+    config = load_config(ROOT / "config.demo.json")
+    dates = pd.bdate_range(end="2026-09-02", periods=5)
+
+    # 00001 (Tech): 昨天跌 -6%，今天涨 +0.2% -> 满足（大跌+微涨<=0.5%）
+    # 00002 (Consumer): 昨天跌 -6%，今天涨 +1.2% -> 过滤（今天涨幅>0.5%）
+    # 00003 (Finance): 昨天涨 +0.2%，今天大跌 -6% -> 满足（今天大跌，昨天涨<=0.5%）
+    test_specs = [
+        ("00001", [100.0, 100.0, 100.0, 94.0, 94.188], "Tech"),
+        ("00004", [100.0, 100.0, 100.0, 100.0, 103.0], "Tech"),
+        ("00005", [100.0, 100.0, 100.0, 100.0, 104.0], "Tech"),
+
+        ("00002", [100.0, 100.0, 100.0, 94.0, 95.128], "Consumer"),
+        ("00006", [100.0, 100.0, 100.0, 100.0, 103.0], "Consumer"),
+        ("00007", [100.0, 100.0, 100.0, 100.0, 104.0], "Consumer"),
+
+        ("00003", [100.0, 100.0, 100.0, 100.2, 94.188], "Finance"),
+        ("00008", [100.0, 100.0, 100.0, 100.0, 103.0], "Finance"),
+        ("00009", [100.0, 100.0, 100.0, 100.0, 104.0], "Finance"),
+    ]
+    rows = []
+    for code, closes, _ in test_specs:
+        for d, c in zip(dates, closes):
+            rows.append({"date": d, "code": code, "close": c, "volume": 10000.0})
+    prices = pd.DataFrame(rows)
+    universe = pd.DataFrame({
+        "code": [s[0] for s in test_specs],
+        "name": [f"Stock_{s[0]}" for s in test_specs],
+        "industry": [s[2] for s in test_specs],
+        "lot_size": [100.0] * len(test_specs),
+        "enabled": [True] * len(test_specs),
+    })
+    news = pd.DataFrame(columns=["code", "published_at", "title", "body", "url"])
+
+    result = evaluate_signal(prices, universe, news, config, asof="2026-09-02")
+    p1 = result.loc[result["code"] == "00001"].iloc[0]
+    p2 = result.loc[result["code"] == "00002"].iloc[0]
+    p3 = result.loc[result["code"] == "00003"].iloc[0]
+
+    assert bool(p1["two_day_drop_ok"])
+    assert bool(p1["passes"])
+    assert not bool(p2["two_day_drop_ok"])
+    assert not bool(p2["passes"])
+    assert bool(p3["two_day_drop_ok"])
+    assert bool(p3["passes"])
 

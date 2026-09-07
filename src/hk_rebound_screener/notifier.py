@@ -9,6 +9,125 @@ import pandas as pd
 import requests
 
 
+# 行业分类中英文对照字典
+INDUSTRY_TRANSLATIONS: dict[str, str] = {
+    "Apparel Manufacturing": "服装制造",
+    "Apparel Retail": "服装与运动零售",
+    "Footwear & Accessories": "鞋类与配饰",
+    "Internet Retail": "互联网电商零售",
+    "Specialty Retail": "专卖零售",
+    "Home Improvement Retail": "家居建材零售",
+    "Department Stores": "百货商店",
+    "Grocery Stores": "超市便利",
+    "Beverages - Non-Alcoholic": "非酒精饮料",
+    "Beverages - Brewers": "啤酒酿造",
+    "Beverages - Wineries & Distilleries": "白酒与葡萄酒",
+    "Packaged Foods": "预包装食品与调味品",
+    "Restaurants": "餐饮连锁",
+    "Household & Personal Products": "日化与个人护理",
+    "Consumer Electronics": "消费电子产品",
+    "Auto Manufacturers": "整车制造",
+    "Auto Parts": "汽车零部件",
+    "Recreational Vehicles": "房车与休闲车",
+    "Furnishings, Fixtures & Appliances": "家电与家居用品",
+    "Semiconductors": "半导体芯片",
+    "Semiconductor Equipment & Materials": "半导体设备与材料",
+    "Software - Application": "应用软件与 SaaS",
+    "Software - Infrastructure": "基础软件与安全",
+    "Information Technology Services": "IT 咨询与服务",
+    "Communication Equipment": "通信网络设备",
+    "Computer Hardware": "电脑与服务器硬件",
+    "Electronic Components": "电子元器件",
+    "Internet Content & Information": "互联网信息与社交媒体",
+    "Entertainment": "影视娱乐与传媒",
+    "Telecom Services": "电信运营服务",
+    "Biotechnology": "生物科技与基因",
+    "Drug Manufacturers - General": "综合大型制药",
+    "Drug Manufacturers - Specialty & Generic": "专科与仿制药",
+    "Medical Devices": "医疗器械与耗材",
+    "Medical Instruments & Supplies": "医疗仪器与试剂",
+    "Diagnostics & Research": "医学诊断与研发服务",
+    "Healthcare Plans": "医疗保险与健康服务",
+    "Medical Care Facilities": "医疗机构与医院",
+    "Waste Management": "废物处理与环保服务",
+    "Pollution & Treatment Controls": "污染治理与净化",
+    "Aerospace & Defense": "航空航天与国防",
+    "Specialty Industrial Machinery": "专用工业机械",
+    "Farm & Heavy Construction Machinery": "工程机械与重型装备",
+    "Electrical Equipment & Parts": "电气设备与电网部件",
+    "Packaging & Containers": "包装与容器制造",
+    "Conglomerates": "综合性多元化集团",
+    "Building Products & Equipment": "建筑建材与设备",
+    "Steel": "钢铁冶炼与加工",
+    "Chemicals": "基础与特种化学品",
+    "Specialty Chemicals": "精细特种化学品",
+    "Other Industrial Metals & Mining": "工业金属采矿",
+    "Gold": "黄金与贵金属",
+    "Oil & Gas Integrated": "综合油气龙头",
+    "Oil & Gas E&P": "石油与天然气勘探开采",
+    "Oil & Gas Refining & Marketing": "炼油与成品油销售",
+    "Solar": "光伏太阳能",
+    "Utilities - Renewable": "清洁与可再生能源",
+    "Utilities - Regulated Electric": "电力电网公用事业",
+    "Banks - Diversified": "综合商业银行",
+    "Banks - Regional": "区域性商业银行",
+    "Credit Services": "信贷与支付服务",
+    "Capital Markets": "证券与资本市场",
+    "Asset Management": "资产管理与财富管理",
+    "Insurance - Life": "人寿保险",
+    "Insurance - Property & Casualty": "财产与意外保险",
+    "Insurance Brokers": "保险经纪与代理",
+    "Real Estate - Development": "房地产开发",
+    "Real Estate Services": "房地产服务与物业",
+    "REIT - Diversified": "综合型不动产信托",
+}
+
+
+def _translate_industry(name: str) -> str:
+    cleaned = str(name).strip()
+    return INDUSTRY_TRANSLATIONS.get(cleaned, cleaned)
+
+
+def _format_market_cap(val: Any, currency: str) -> str:
+    if pd.isna(val) or val is None:
+        return "-"
+    try:
+        val_num = float(val)
+        if val_num <= 0:
+            return "-"
+        if val_num >= 1e12:
+            return f"{val_num / 1e12:.2f} 万亿 {currency}"
+        if val_num >= 1e8:
+            return f"{val_num / 1e8:.2f} 亿 {currency}"
+        if val_num >= 1e4:
+            return f"{val_num / 1e4:.0f} 万 {currency}"
+        return f"{val_num:.0f} {currency}"
+    except Exception:
+        return "-"
+
+
+def _format_pe(val: Any) -> str:
+    if pd.isna(val) or val is None:
+        return "-"
+    try:
+        num = float(val)
+        if num < 0:
+            return "亏损(<0)"
+        return f"{num:.1f}x"
+    except Exception:
+        return "-"
+
+
+def _format_pb(val: Any) -> str:
+    if pd.isna(val) or val is None:
+        return "-"
+    try:
+        num = float(val)
+        return f"{num:.2f}x"
+    except Exception:
+        return "-"
+
+
 def format_markdown_report(
     result: pd.DataFrame,
     market: str,
@@ -17,7 +136,7 @@ def format_markdown_report(
 ) -> str:
     """将选股结果格式化为美观、结构清晰的 Markdown 报表。"""
     strategy_mode = str(config.get("strategy_mode", "rebound")).lower()
-    strategy_title = "双日下跌+流动性策略" if strategy_mode == "two_day_drop" else "超跌反弹与行业滞涨策略"
+    strategy_title = "双日大跌+未大幅反弹策略" if strategy_mode == "rebound" else "双日下跌+流动性策略"
     market_upper = market.upper()
     currency = "USD" if market_upper == "US" else "HKD"
 
@@ -48,7 +167,8 @@ def format_markdown_report(
     for rank, (_, row) in enumerate(passed.iterrows(), start=1):
         code = str(row.get("code", "")).strip()
         name = str(row.get("name", "")).strip()
-        industry = str(row.get("industry", "")).strip()
+        raw_industry = str(row.get("industry", "")).strip()
+        industry = _translate_industry(raw_industry)
         close = f"{float(row['close']):.3f}".rstrip("0").rstrip(".") + f" {currency}" if pd.notna(row.get("close")) else "-"
         prior_ret = f"{float(row['prior_return_pct']):+.2f}%" if pd.notna(row.get("prior_return_pct")) else "-"
         daily_ret = f"{float(row['daily_return_pct']):+.2f}%" if pd.notna(row.get("daily_return_pct")) else "-"
@@ -57,21 +177,32 @@ def format_markdown_report(
         vol_ratio = f"{float(row['volume_ratio']):.2f}x" if pd.notna(row.get("volume_ratio")) else "-"
         score = f"{float(row['score']):.2f}" if pd.notna(row.get("score")) else "-"
 
-        # 手机端卡片式设计，彻底杜绝竖屏列挤压
+        market_cap_str = _format_market_cap(row.get("market_cap"), currency)
+        pe_str = _format_pe(row.get("pe"))
+        pb_str = _format_pb(row.get("pb"))
+
+        # 手机端全中文专属卡片视图
         lines.extend([
             f"### {rank:02d}. `{code}` {name}",
             f"> 🏢 **所属行业**：{industry}",
-            f"> 💰 **最新收盘**：`{close}`（当日 `{daily_ret}`）",
-            f"> 📉 **前序跌幅**：`{prior_ret}` ｜ **行业均值**：`{ind_avg}`",
-            f"> 🎯 **相对滞涨**：`{lag}` ｜ **异动量比**：`{vol_ratio}`",
-            f"> ⭐ **综合得分**：**{score}**",
+            f"> 💰 **最新现价**：`{close}` ｜ **总市值**：`{market_cap_str}`",
+            f"> 📊 **估值指标**：**PE** `{pe_str}` ｜ **PB** `{pb_str}`",
+            f"> 📉 **两日涨跌**：**今日(T)** `{daily_ret}` ｜ **昨日(T-1)** `{prior_ret}`",
+            f"> 🎯 **行业均值**：`{ind_avg}` ｜ **相对滞涨**：`{lag}`",
+            f"> 📈 **异动量比**：`{vol_ratio}` ｜ ⭐ **综合评分**：**{score}**",
             "",
             "---",
             "",
         ])
 
-    lines.append("> 💡 *提示：以上结果基于量化技术面及 48 小时舆情排雷初筛，不构成投资建议。*")
-    lines.append("")
+    lines.extend([
+        "> 💡 **PE / PB 极速参考**：",
+        "> • **PE(市盈率-回本年限)**：<10 极便宜(黄金坑)；15~25 正常；>50 偏贵；<0 亏损避雷。",
+        "> • **PB(市净率-家底折扣)**：<1.0 破净(打折甩卖)；1~3 正常；>5 偏贵(轻资产除外)。",
+        "",
+        "> ⚠️ *风险提示：以上结果基于量化技术面及 48 小时舆情排雷初筛，不构成投资建议。*",
+        "",
+    ])
     return "\n".join(lines)
 
 

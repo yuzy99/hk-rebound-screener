@@ -11,6 +11,7 @@ from .adapters import (
     build_full_universe,
     build_live_prices,
     build_us_live_prices,
+    enrich_candidate_fundamentals,
     fetch_akshare_news,
     fetch_hkex_security_master,
     fetch_usd_hkd_rate,
@@ -145,8 +146,15 @@ def main() -> None:
         print(f"回测摘要: {summary}")
         return
 
+    fundamentals = pd.DataFrame(columns=["code", "market_cap", "pe", "pb"])
     if full_market_scan:
-        # 新闻是第二阶段：先筛价格/行业条件，再对候选股抓新闻，降低免费源限流。
+        if not spot.empty and "name" in spot:
+            cn_names = spot.loc[spot["name"].fillna("").astype(str).str.strip().ne(""), ["code", "name"]].drop_duplicates("code")
+            if not cn_names.empty:
+                name_map = dict(zip(cn_names["code"], cn_names["name"]))
+                universe["name"] = universe["code"].map(name_map).fillna(universe["name"])
+
+        # 新闻与估值是第二阶段：先筛价格/行业条件，再对候选股抓新闻和PE/PB/市值
         preliminary_status = pd.DataFrame({"code": universe["code"], "news_fetch_ok": True})
         preliminary = evaluate_signal(
             prices,
@@ -157,7 +165,7 @@ def main() -> None:
             news_status=preliminary_status,
         )
         candidate_codes = preliminary.loc[preliminary["passes"], "code"].tolist()
-        print(f"价格/行业初筛候选: {len(candidate_codes)} 条；仅抓取候选股新闻")
+        print(f"价格/行业初筛候选: {len(candidate_codes)} 条；正在获取候选股新闻与估值指标...")
         if candidate_codes:
             if market == "HK":
                 news, candidate_status = fetch_akshare_news(candidate_codes)
@@ -166,9 +174,12 @@ def main() -> None:
             status_map = dict(zip(candidate_status["code"], candidate_status["news_fetch_ok"]))
             news_status = pd.DataFrame({"code": universe["code"]})
             news_status["news_fetch_ok"] = news_status["code"].map(status_map).fillna(False)
+            fundamentals = enrich_candidate_fundamentals(candidate_codes, market=market)
         else:
             news_status = preliminary_status
     result = evaluate_signal(prices, universe, news, config, asof=asof, news_status=news_status)
+    if not fundamentals.empty:
+        result = result.merge(fundamentals, on="code", how="left")
     strategy_mode = str(config.get("strategy_mode", "rebound")).lower()
     strategy_suffix = "" if strategy_mode == "rebound" else f"_{strategy_mode}"
     output_path = output_dir / f"scan_{market.lower()}{strategy_suffix}_{pd.Timestamp(asof).date().isoformat()}.csv"
