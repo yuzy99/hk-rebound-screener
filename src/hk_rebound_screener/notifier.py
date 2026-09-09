@@ -171,7 +171,12 @@ def format_markdown_report(
 ) -> str:
     """将选股结果格式化为美观、结构清晰的 Markdown 报表。"""
     strategy_mode = str(config.get("strategy_mode", "rebound")).lower()
-    strategy_title = "双日大跌+未大幅反弹策略" if strategy_mode == "rebound" else "双日下跌+流动性策略"
+    strategy_titles = {
+        "rebound": "双日大跌+未大幅反弹策略",
+        "two_day_drop": "双日下跌+流动性策略",
+        "industry_lag_rebound": "行业回暖、个股滞涨基础策略",
+    }
+    strategy_title = strategy_titles.get(strategy_mode, strategy_mode)
     market_upper = market.upper()
     currency = "USD" if market_upper == "US" else "HKD"
 
@@ -188,10 +193,22 @@ def format_markdown_report(
         "",
     ]
 
+    if strategy_mode == "industry_lag_rebound":
+        lines.extend([
+            "- **持有规则**：信号次日开盘买入，第 3 个持有交易日收盘卖出（仅生成筛选结果，不下单）",
+            f"- **成交量条件**：策略今日单日成交量 > {int(float(config.get('min_signal_day_volume_shares', 500000))):,} 股",
+            "",
+        ])
+
     if passed.empty:
+        empty_note = (
+            "今日扫描完毕，**未发现**同时满足昨日大跌、今日行业回暖及个股滞涨条件的标的。"
+            if strategy_mode == "industry_lag_rebound"
+            else "今日扫描完毕，**未发现**同时满足跌幅、流动性及无负面新闻条件的标的。"
+        )
         lines.extend([
             "> [!NOTE]",
-            "> 今日扫描完毕，**未发现**同时满足跌幅、行业滞涨、流动性及无负面新闻条件的标的。",
+            f"> {empty_note}",
             "",
         ])
         return "\n".join(lines)
@@ -205,37 +222,69 @@ def format_markdown_report(
         raw_industry = str(row.get("industry", "")).strip()
         industry = _translate_industry(raw_industry)
         close = f"{float(row['close']):.3f}".rstrip("0").rstrip(".") + f" {currency}" if pd.notna(row.get("close")) else "-"
-        prior_ret = f"{float(row['prior_return_pct']):+.2f}%" if pd.notna(row.get("prior_return_pct")) else "-"
-        daily_ret = f"{float(row['daily_return_pct']):+.2f}%" if pd.notna(row.get("daily_return_pct")) else "-"
-        ind_avg = f"{float(row['industry_avg_return_pct']):+.2f}%" if pd.notna(row.get("industry_avg_return_pct")) else "-"
+        prior_value = row.get("yesterday_return_pct", row.get("prior_return_pct"))
+        daily_value = row.get("today_return_pct", row.get("daily_return_pct"))
+        industry_value = row.get("industry_return_pct", row.get("industry_avg_return_pct"))
+        prior_ret = f"{float(prior_value):+.2f}%" if pd.notna(prior_value) else "-"
+        daily_ret = f"{float(daily_value):+.2f}%" if pd.notna(daily_value) else "-"
+        ind_avg = f"{float(industry_value):+.2f}%" if pd.notna(industry_value) else "-"
         lag = f"{float(row['lag_vs_industry_pct']):+.2f}%" if pd.notna(row.get("lag_vs_industry_pct")) else "-"
+        signal_volume = (
+            f"{int(float(row['signal_day_volume'])):,} 股"
+            if pd.notna(row.get("signal_day_volume"))
+            else "-"
+        )
         vol_ratio = f"{float(row['volume_ratio']):.2f}x" if pd.notna(row.get("volume_ratio")) else "-"
         score = f"{float(row['score']):.2f}" if pd.notna(row.get("score")) else "-"
+        score_label = "落后行业排序分" if strategy_mode == "industry_lag_rebound" else "综合评分"
+
+        forward_lines: list[str] = []
+        for offset in range(1, int(config.get("append_forward_trading_days", 0)) + 1):
+            forward_date = row.get(f"forward_t{offset}_date")
+            forward_close = row.get(f"forward_t{offset}_close")
+            forward_return = row.get(f"forward_t{offset}_return_pct")
+            date_text = str(forward_date) if pd.notna(forward_date) else "数据不足"
+            close_text = f"{float(forward_close):.3f}".rstrip("0").rstrip(".") if pd.notna(forward_close) else "-"
+            return_text = f"{float(forward_return):+.2f}%" if pd.notna(forward_return) else "-"
+            forward_lines.append(
+                f"> ⏩ **T+{offset} ({date_text})**：收盘 `{close_text} {currency}` ｜ 当日涨跌 `{return_text}`"
+            )
 
         market_cap_str = _format_market_cap(row.get("market_cap"), currency)
         pe_str = _format_pe(row.get("pe"))
         pb_str = _format_pb(row.get("pb"))
 
         # 手机端全中文专属卡片视图
+        industry_label = "行业涨幅" if strategy_mode == "industry_lag_rebound" else "行业均值"
+        source = ""
+        if strategy_mode == "industry_lag_rebound" and row.get("industry_return_source") == "peer_equal_weight":
+            source = "（股票池同行业等权平均）"
         lines.extend([
             f"### {rank:02d}. `{code}` {name}",
             f"> 🏢 **所属行业**：{industry}",
             f"> 💰 **最新现价**：`{close}` ｜ **总市值**：`{market_cap_str}`",
             f"> 📊 **估值指标**：**PE** `{pe_str}` ｜ **PB** `{pb_str}`",
             f"> 📉 **两日涨跌**：**今日(T)** `{daily_ret}` ｜ **昨日(T-1)** `{prior_ret}`",
-            f"> 🎯 **行业均值**：`{ind_avg}` ｜ **相对滞涨**：`{lag}`",
-            f"> 📈 **异动量比**：`{vol_ratio}` ｜ ⭐ **综合评分**：**{score}**",
+            f"> 🎯 **{industry_label}**：`{ind_avg}`{source} ｜ **落后行业**：`{lag}`",
+            f"> 📦 **策略今日成交量**：`{signal_volume}`",
+            f"> 📈 **异动量比**：`{vol_ratio}` ｜ ⭐ **{score_label}**：**{score}**",
+            *forward_lines,
             "",
             "---",
             "",
         ])
 
+    risk_note = (
+        "> ⚠️ *风险提示：以上结果仅依据配置的行业与个股收盘涨跌幅条件生成，不构成投资建议。*"
+        if strategy_mode == "industry_lag_rebound"
+        else "> ⚠️ *风险提示：以上结果基于量化技术面及 48 小时舆情排雷初筛，不构成投资建议。*"
+    )
     lines.extend([
         "> 💡 **PE / PB 极速参考**：",
         "> • **PE(市盈率-回本年限)**：<10 极便宜(黄金坑)；15~25 正常；>50 偏贵；<0 亏损避雷。",
         "> • **PB(市净率-家底折扣)**：<1.0 破净(打折甩卖)；1~3 正常；>5 偏贵(轻资产除外)。",
         "",
-        "> ⚠️ *风险提示：以上结果基于量化技术面及 48 小时舆情排雷初筛，不构成投资建议。*",
+        risk_note,
         "",
     ])
     return "\n".join(lines)

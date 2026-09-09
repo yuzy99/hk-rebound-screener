@@ -5,7 +5,6 @@
 00004,Real Estate—Development,WHARF HOLDINGS
 00005,Banks—Diversified,HSBC HOLDINGS
 00006,Utilities—Independent Power Producers,POWER ASSETS
-00007,,WISDOM WEALTH
 00008,Telecom Services,PCCW
 00010,Real Estate Services,HANG LUNG GROUP
 00012,Real Estate—Diversified,HENDERSON LAND
@@ -61,7 +60,7 @@
 00071,Travel Services,MIRAMAR HOTEL
 00072,Advertising Agencies,META MEDIA
 00073,Food Distribution,ASIAN CITRUS
-00075,,Y.T. REALTY
+00075,Real Estate—Development,Y.T. REALTY
 00076,Electronic Components,ELATE HOLDINGS
 00077,Railroads,AMS TRANSPORT
 00078,Lodging,REGAL INT'L
@@ -88,7 +87,7 @@
 00101,Real Estate Services,HANG LUNG PPT
 00103,Steel,SHOUGANG CENT
 00104,Specialty Retail,ASIA COMM HOLD
-00105,,ASSO INT HOTELS
+00105,Real Estate Services,ASSO INT HOTELS
 00106,,LANDSEA MGMT
 00107,Infrastructure Operations,SICHUAN EXPRESS
 00108,Real Estate Services,SR MEDICAL
@@ -96,7 +95,7 @@
 00111,Capital Markets,CINDA INTL HLDG
 00113,Luxury Goods,DICKSON CONCEPT
 00114,Leisure,HERALD HOLD
-00115,,GRAND FIELD GP
+00115,Real Estate—Development,GRAND FIELD GP
 00116,Luxury Goods,CHOW SANG SANG
 00117,Electronic Components,TIANLI HOLDINGS
 00118,Conglomerates,COSMOS MACH
@@ -116,7 +115,7 @@
 00135,Oil & Gas Refining & Marketing,KUNLUN ENERGY
 00136,Entertainment,CHINA RUYI
 00137,Marine Shipping,JINHUI HOLDINGS
-00138,,CCT FORTIS
+00138,Auto & Truck Dealerships,CCT FORTIS
 00139,Capital Markets,SMART FISH
 00142,Packaged Foods,FIRST PACIFIC
 00144,Marine Shipping,CHINA MER PORT
@@ -150,7 +149,7 @@
 00177,Infrastructure Operations,JIANGSU EXPRESS
 00178,Specialty Retail,SA SA INT'L
 00179,Auto Parts,JOHNSON ELEC H
-00180,,KADER HOLDINGS
+00180,Leisure,KADER HOLDINGS
 00181,Lodging,FUJIAN HOLDINGS
 00182,Utilities—Renewable,CONCORD NE
 00183,Real Estate Services,WINFULL GP
@@ -216,7 +215,7 @@
 00261,Conglomerates,GBA HOLDINGS
 00262,Real Estate—Development,DESON DEV INT'L
 00264,Footwear & Accessories,CN INT DEV CORP
-00265,,GANGYU SERVICES
+00265,Real Estate Services,GANGYU SERVICES
 00266,,TIAN TECK LAND
 00267,Conglomerates,CITIC
 00268,Software—Application,KINGDEE INT'L
@@ -333,7 +332,7 @@
 00406,,YAU LEE HOLD
 00408,Specialty Chemicals,YIP'S CHEMICAL
 00410,Real Estate Services,SOHO CHINA
-00411,,LAM SOON (HK)
+00411,Packaged Foods,LAM SOON (HK)
 00412,Asset Management,SDHG
 00413,Leisure,SC HOLDINGS
 00417,Luxury Goods,TSE SUI LUEN
@@ -426,7 +425,7 @@
 00553,Electronic Components,NANJING PANDA
 00554,Conglomerates,HANS GP HLDGS
 00556,Pollution & Treatment Controls,PAN ASIA ENVIRO
-00557,,TIANYUAN HEALTH
+00557,Credit Services,TIANYUAN HEALTH
 00558,Specialty Industrial Machinery,LK TECH
 00559,,DETAI NEWENERGY
 00560,Marine Shipping,CHU KONG SHIP
@@ -479,7 +478,7 @@
 00622,Capital Markets,OSHIDORI
 00623,Advertising Agencies,GOLDENBRIDGE GP
 00625,Internet Retail,SHEIN-W
-00626,,PUBLIC FIN HOLD
+00626,Banks—Regional,PUBLIC FIN HOLD
 00627,Real Estate—Development,VISION SYNERGY
 00628,Credit Services,TONGTONG AI SOC
 00629,,YUE DA INTL
@@ -531,7 +530,7 @@
 00689,Oil & Gas E&P,EPI (HOLDINGS)
 00690,Biotechnology,UNI-BIO GROUP
 00691,Building Materials,SHANSHUI CEMENT
-00693,,TAN CHONG INT'L
+00693,Auto & Truck Dealerships,TAN CHONG INT'L
 00694,Airports & Air Services,BEIJING AIRPORT
 00695,Building Materials,DONGWU CEMENT
 00696,Information Technology Services,TRAVELSKY TECH
@@ -581,10 +580,10 @@
 00756,Beverages—Non-Alcoholic,SUMMI
 00757,Solar,SOLARGIGA
 00759,Grocery Stores,CEC INT'L HOLD
-00760,,TALENT PPT GP
+00760,Real Estate—Development,TALENT PPT GP
 00762,Telecom Services,CHINA UNICOM
 00763,Communication Equipment,ZTE
-00764,,ETERNITY INV
+00764,Conglomerates,ETERNITY INV
 00765,,PERFECTECH INTL
 00767,Diagnostics & Research,ZHONG JI LS
 00769,,CHINA RAREEARTH
@@ -652,7 +651,7 @@
 00862,Conglomerates,VISION VALUES
 00863,Capital Markets,OSL GROUP
 00864,,WING LEE PPT
-00865,,JIANDE INT'L
+00865,Real Estate—Development,JIANDE INT'L
 00866,Thermal Coal,CHINA QINFA
 00867,Drug Manufacturers—Specialty & Generic,CMS
 00868,Building Materials,XINYI GLASS
@@ -750,7 +749,7 @@
 01002,Specialty Chemicals,V.S. INT'L
 01003,Entertainment,HUANXI MEDIA
 01004,Utilities—Renewable,C SMARTERENERGY
-01005,,MATRIX HOLDINGS
+01005,Leisure,MATRIX HOLDINGS
 01007,,LONGHUI INTL
 01008,Packaging & Containers,LITU HOLDINGS
 01009,Real Estate Services,INT'L ENT
@@ -772,12 +771,12 @@
 01036,Real Estate Services,VANKE OVERSEAS
 01037,Information Technology Services,MAXNERVA TECH
 01038,Utilities—Regulated Electric,CKI HOLDINGS
-01039,,CHANGYOU INT GP
+01039,Internet Retail,CHANGYOU INT GP
 01044,Household & Personal Products,HENGAN INT'L
 01045,Telecom Services,APT SATELLITE
 01046,Entertainment,UNIVERSE ENT
 01047,Specialty Chemicals,NGAI HING HONG
-01049,,CELESTIAL ASIA
+01049,Department Stores,CELESTIAL ASIA
 01050,Metal Fabrication,KARRIE INT'L
 01051,Asset Management,G-RESOURCES
 01052,Infrastructure Operations,YUEXIUTRANSPORT
@@ -788,7 +787,7 @@
 01059,Information Technology Services,KANTONE HOLDING
 01060,Entertainment,DAMAI ENT
 01061,Drug Manufacturers—Specialty & Generic,ESSEX BIO-TECH
-01063,Conglomerates,SUNCORP TEC-NEW
+01063,Conglomerates,SUNCORP TECH
 01064,Real Estate—Development,ZHONG HUA INT'L
 01065,Waste Management,TIANJIN CAPITAL
 01066,Medical Instruments & Supplies,WEIGAO GROUP
@@ -1028,7 +1027,7 @@
 01392,Software—Infrastructure,HQVT
 01393,Thermal Coal,HIDILI INDUSTRY
 01395,Waste Management,ELL ENV
-01396,Information Technology Services,GBA AI COMP
+01396,Information Technology Services,GBA AI COMP-500
 01397,Waste Management,BAGUIO GREEN
 01398,Banks—Diversified,ICBC
 01399,Electrical Equipment & Parts,VESON HLDG
@@ -1080,11 +1079,11 @@
 01472,Engineering & Construction,SANG HING HLDGS
 01473,Communication Equipment,PANGAEA CONNECT
 01475,Packaged Foods,NISSIN FOODS
-01476,,FIN STREET SEC
+01476,Capital Markets,FIN STREET SEC
 01477,Biotechnology,OCUMENSION-B
 01478,Electronic Components,Q TECH
 01480,Electronic Components,YAN TAT GROUP
-01481,,SMART GLOBE
+01481,Specialty Business Services,SMART GLOBE
 01483,Waste Management,NET-A-GO TECH
 01486,,C CHENG HLDGS
 01488,Restaurants,BEST FOOD HLDG
@@ -1132,10 +1131,10 @@
 01553,Steel,MAIKE TUBE
 01555,Oil & Gas E&P,MIE HOLDINGS
 01556,Engineering & Construction,CHINNEY KW
-01557,,K.H. GP HLDGS
-01559,,KWAN ON HLDGS
+01557,Engineering & Construction,K.H. GP HLDGS
+01559,Engineering & Construction,KWAN ON HLDGS
 01560,Conglomerates,STAR GROUP ASIA
-01561,,PAN ASIA DATA H
+01561,Specialty Chemicals,PAN ASIA DATA H
 01563,Education & Training Services,ALLI INTL ED LE
 01565,Education & Training Services,VIRSCEND EDU
 01566,Entertainment,CA CULTURAL
@@ -1241,7 +1240,7 @@
 01703,Restaurants,EASYHOLD GROUP
 01705,Food Distribution,B & S INTL HLDG
 01707,,GEOTECH HLDGS
-01708,,SAMPLE TECH
+01708,Communication Equipment,SAMPLE TECH
 01709,Financial Conglomerates,DL HOLDINGS GP
 01710,Electrical Equipment & Parts,TRIO IND ELEC
 01711,Specialty Retail,ULFERTS
@@ -1322,7 +1321,7 @@
 01800,Engineering & Construction,CHINA COMM CONS
 01801,Biotechnology,INNOVENT BIO
 01802,,WENYE GROUP
-01803,,BJ SPORTS&E-NEW
+01803,Leisure,BJ SPORTS&E-NEW
 01808,Software—Application,ENTERPRISE DEV
 01809,Auto Parts,PRINX CHENGSHAN
 01810,智能硬件,小米集团-W
@@ -1333,7 +1332,7 @@
 01816,Utilities—Independent Power Producers,CGN POWER
 01817,Apparel Retail,MULSANNE GROUP
 01818,Gold,ZHAOJIN MINING
-01820,,PM PACKAGING
+01820,Packaging & Containers,PM PACKAGING
 01822,Lumber & Wood Production,CHINA WOOD INT
 01823,Infrastructure Operations,HUAYUEXPRESSWAY
 01825,Apparel Manufacturing,STERLING GP
@@ -1596,7 +1595,7 @@
 02205,Real Estate Services,KANGQIAO SER
 02208,Specialty Industrial Machinery,GOLDWIND
 02209,Internet Retail,YESASIA HLDGS
-02210,,BEIJING JIAYE
+02210,Real Estate Services,BEIJING JIAYE
 02211,Pharmaceutical Retailers,UNI HEALTH
 02212,Building Materials,FB MINING
 02215,Real Estate Services,DEXIN SER GROUP
@@ -1651,7 +1650,7 @@
 02285,Tools & Accessories,CHERVON
 02286,Real Estate—Development,CHEN XING
 02288,Real Estate—Development,RYKADAN CAPITAL
-02289,,CHARMACY PHAR
+02289,Medical Distribution,CHARMACY PHAR
 02290,Department Stores,LUNG FUNG GROUP
 02291,Medical Devices,SCIENTECH
 02293,Staffing & Employment Services,BAMBOOSHEALTH
@@ -1811,7 +1810,7 @@
 02528,Apparel Retail,FW FASHION INT
 02529,Specialty Business Services,HOLLWIN URBAN
 02530,Packaged Foods,NUMANS
-02531,,CARLINK TECH
+02531,Auto Parts,CARLINK TECH
 02533,Semiconductors,BLACK SESAME
 02535,Metal Fabrication,WK GROUP
 02536,Resorts & Casinos,PALASINO
@@ -1961,7 +1960,7 @@
 02877,Drug Manufacturers—Specialty & Generic,SHINEWAY PHARM
 02878,Semiconductors,SOLOMON SYSTECH
 02880,Marine Shipping,LIAONING PORT
-02881,,WUHAN YOUJI
+02881,Chemicals,WUHAN YOUJI
 02882,Luxury Goods,3DG HOLDINGS
 02883,Oil & Gas Equipment & Services,CHINA OILFIELD
 02885,Security & Protection Services,PEIPORT HOLD
@@ -1972,7 +1971,6 @@
 02898,,SUNHO BIO-B
 02899,Gold,ZIJIN MINING
 02901,,FANTASIA-OLD
-02903,,SUNCORP TEC-OLD
 02908,,BJ SPORTS&E-OLD
 02909,,IMAGI INT'L-8K
 02910,,ASIA STRAT-10K
@@ -1980,8 +1978,10 @@
 02913,,TIAN CHENG HLDG
 02914,,ALPHA PRO H-20K
 02918,,AI ENERGY E-10K
+02919,,GBA AI COMP-2K
 03200,Specialty Industrial Machinery,HANS CNC
 03223,Semiconductors,INGENIC
+03231,,EXCELLAND ROBOT
 03268,Communication Equipment,MEIG
 03277,Semiconductor Equipment & Materials,GPIXEL
 03288,Packaged Foods,HAITIAN FLAV
@@ -2060,7 +2060,7 @@
 03678,Capital Markets,HOLLY FUTURES
 03680,Information Technology Services,RUIHE DATA
 03681,Biotechnology,SINOMAB BIO-B
-03683,,GREAT HARVEST
+03683,Marine Shipping,GREAT HARVEST
 03686,Grocery Stores,CLIFFORDML
 03688,Real Estate—Development,TOP SPRING
 03689,Medical Care Facilities,KANGHUA HEALTH
@@ -2131,7 +2131,7 @@
 03939,Gold,WANGUO GOLD GP
 03952,Specialty Industrial Machinery,LAIFUAL
 03958,Capital Markets,DFZQ
-03963,,RONGZHONG FIN
+03963,Credit Services,RONGZHONG FIN
 03968,Banks—Regional,CM BANK
 03969,Railroads,CHINA CRSC
 03978,Education & Training Services,BESTSTUDY EDU
@@ -2199,7 +2199,7 @@
 06182,Engineering & Construction,TWINTEK
 06185,Drug Manufacturers—Specialty & Generic,CANSINOBIO
 06186,Packaged Foods,CHINA FEIHE
-06188,,BJ DIGITAL
+06188,Specialty Retail,BJ DIGITAL
 06189,,ADWAY
 06190,Banks—Regional,BANKOFJIUJIANG
 06193,Building Materials,TAILAM TECHCON
@@ -2262,7 +2262,7 @@
 06818,Banks—Regional,CEB BANK
 06820,Electronic Gaming & Multimedia,FRIENDTIMES
 06821,Biotechnology,ASYMCHEM
-06822,,KING'S FLAIR
+06822,"Furnishings, Fixtures & Appliances",KING'S FLAIR
 06823,Telecom Services,HKT-SS
 06826,Biotechnology,HAOHAI BIOTEC
 06828,Utilities—Regulated Gas,BG BLUE SKY
@@ -2425,11 +2425,11 @@
 08149,Conglomerates,ALTUS HLDGS
 08152,Industrial Distribution,M&L HOLDINGS
 08153,Advertising Agencies,JIADING INTL GP
-08156,,SINOPHARM TECH
+08156,Software—Application,SINOPHARM TECH
 08158,Biotechnology,CRMI
-08159,,CU VENTURE INV
+08159,Computer Hardware,CU VENTURE INV
 08160,Education & Training Services,GOLDWAY EDU
-08161,,MEDINET GROUP
+08161,Medical Care Facilities,MEDINET GROUP
 08162,Other Industrial Metals & Mining,LOCO HK
 08163,Financial Conglomerates,NOIZ GROUP
 08168,Capital Markets,AMASSE CAPITAL
@@ -2485,14 +2485,14 @@
 08270,Oil & Gas Integrated,CHINA CBM
 08271,Entertainment,GDC
 08275,Engineering & Construction,CHINA NEW CONS
-08277,,STEEDORIENTAL
+08277,Lumber & Wood Production,STEEDORIENTAL
 08279,Gambling,AGTECH HOLDINGS
 08280,Entertainment,CDV HOLDINGS
 08281,Household & Personal Products,CH GOLD CLASSIC
-08282,,GAMEONE
+08282,Electronic Gaming & Multimedia,GAMEONE
 08283,Auto & Truck Dealerships,ZHONGSHI MINAN
 08285,Footwear & Accessories,SLING GROUP
-08286,,CCOE
+08286,Communication Equipment,CCOE
 08290,Software—Application,AHSAY BACKUP
 08291,Packaging & Containers,HK ENT INTL
 08292,Entertainment,VSING
@@ -2503,8 +2503,8 @@
 08299,Gold,GT GOLD
 08300,Restaurants,JIN MI FANG GP
 08305,Engineering & Construction,ST HLDGS
-08307,,MEDICSKIN
-08308,,GUDOU HLDGS
+08307,Medical Care Facilities,MEDICSKIN
+08308,Resorts & Casinos,GUDOU HLDGS
 08309,Waste Management,MANSHING GLOBAL
 08310,Integrated Freight & Logistics,YANCHENG PORT
 08311,Electronic Components,PERFECT OPT
@@ -2522,8 +2522,8 @@
 08333,Capital Markets,ASTRUM FIN
 08337,,DIRECTEL
 08340,Capital Markets,ZIJING INTL FIN
-08341,,AESO HOLDING
-08347,,F8 ENT
+08341,Consulting Services,AESO HOLDING
+08347,Oil & Gas Refining & Marketing,F8 ENT
 08348,Integrated Freight & Logistics,BINHAI TEDA
 08349,,GUIXIN GROUP
 08350,Capital Markets,WELL LINK SEC
@@ -2534,7 +2534,7 @@
 08365,Capital Markets,HATCHER GROUP
 08366,Engineering & Construction,ZJ UNITED INV
 08367,Restaurants,SIMPLICITY HLDG
-08368,,CREATIVE CHINA
+08368,Entertainment,CREATIVE CHINA
 08370,"Furnishings, Fixtures & Appliances",ZHI SHENG GP
 08371,Restaurants,TASTEGOURMET GP
 08372,Medical Distribution,GBG HOLDINGS
@@ -2624,7 +2624,7 @@
 08549,Engineering & Construction,GOLDEN LEAF INT
 08577,,BRIGHTSTAR-OLD
 08580,,KPM HOLDING RTS
-08601,,BOLTEK
+08601,Engineering & Construction,BOLTEK
 08606,Information Technology Services,KINETIX SYSTEMS
 08610,Engineering & Construction,BBSB INTL
 08611,Information Technology Services,JUFEEL
@@ -2645,7 +2645,7 @@
 08646,Building Products & Equipment,CHINA HONGGUANG
 08657,Asset Management,TRUE PARTNER
 08659,Packaging & Containers,YIK WO INTL
-08668,,YING HAI GROUP
+08668,Travel Services,YING HAI GROUP
 09600,Software—Application,NEWLINK TECH
 09606,Biotechnology,DUALITYBIO-B
 09608,Real Estate Services,SUNDY SERVICE
@@ -2734,6 +2734,7 @@
 09969,Biotechnology,INNOCARE
 09971,Semiconductors,BASICSEMI
 09973,Auto Manufacturers,CHERY AUTO
+09976,Computer Hardware,LONGSYS
 09978,Real Estate Services,FINELAND LIVING
 09979,Real Estate Services,GREENTOWN MGMT
 09980,Beverages—Non-Alcoholic,EASTROC

@@ -18,7 +18,15 @@ from .adapters import (
     fetch_yfinance_news,
 )
 from .notifier import format_markdown_report, send_webhook_notification, write_step_summary
-from .strategy import evaluate_signal, load_config, load_news, load_prices, load_universe, run_backtest
+from .strategy import (
+    append_forward_observations,
+    evaluate_signal,
+    load_config,
+    load_news,
+    load_prices,
+    load_universe,
+    run_backtest,
+)
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -44,6 +52,9 @@ def main() -> None:
     args = parse_args()
     config = load_config(args.config)
     market = str(config.get("market", "HK")).upper()
+    strategy_mode = str(config.get("strategy_mode", "rebound")).lower()
+    if args.mode == "backtest" and strategy_mode == "industry_lag_rebound":
+        raise SystemExit("industry_lag_rebound 当前只生成筛选结果，不支持回测模式")
     default_files = {
         "HK": {
             "universe": ROOT / "universe.csv",
@@ -109,7 +120,10 @@ def main() -> None:
                 history_days=int(config["history_days"]),
                 adjust=str(config.get("price_adjust", "")),
             )
-            news, news_status = fetch_akshare_news(codes)
+            if strategy_mode == "industry_lag_rebound":
+                news = pd.DataFrame(columns=["code", "published_at", "title", "body", "url"])
+            else:
+                news, news_status = fetch_akshare_news(codes)
             try:
                 hkex_master = fetch_hkex_security_master()
                 universe = universe.drop(columns=["lot_size"]).merge(hkex_master, on="code", how="left")
@@ -132,7 +146,19 @@ def main() -> None:
 
     if prices.empty:
         raise SystemExit("没有可用价格数据，请检查数据源、代码和日期")
-    asof = args.asof or live_asof or str(prices["date"].max().date())
+    if strategy_mode == "industry_lag_rebound" and not args.asof and live_asof is not None:
+        spot_date = pd.Timestamp(live_asof).normalize()
+        completed_dates = sorted(
+            pd.Timestamp(value) for value in prices["date"].dropna().unique()
+            if pd.Timestamp(value) < spot_date
+        )
+        if completed_dates:
+            live_asof = completed_dates[-1]
+            print(f"行业回暖策略使用最近完整收盘日: {live_asof.date()}")
+    configured_test_asof = config.get("test_asof_date") if args.mode != "backtest" else None
+    asof = args.asof or configured_test_asof or live_asof or str(prices["date"].max().date())
+    if configured_test_asof and not args.asof:
+        print(f"历史测试使用配置的信号日: {configured_test_asof}")
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -147,7 +173,7 @@ def main() -> None:
         return
 
     fundamentals = pd.DataFrame(columns=["code", "market_cap", "pe", "pb"])
-    if full_market_scan:
+    if full_market_scan and strategy_mode != "industry_lag_rebound":
         if not spot.empty and "name" in spot:
             cn_names = spot.loc[spot["name"].fillna("").astype(str).str.strip().ne(""), ["code", "name"]].drop_duplicates("code")
             if not cn_names.empty:
@@ -178,9 +204,11 @@ def main() -> None:
         else:
             news_status = preliminary_status
     result = evaluate_signal(prices, universe, news, config, asof=asof, news_status=news_status)
+    forward_days = int(config.get("append_forward_trading_days", 0))
+    if forward_days:
+        result = append_forward_observations(result, prices, asof=asof, trading_days=forward_days)
     if not fundamentals.empty:
         result = result.merge(fundamentals, on="code", how="left")
-    strategy_mode = str(config.get("strategy_mode", "rebound")).lower()
     strategy_suffix = "" if strategy_mode == "rebound" else f"_{strategy_mode}"
     output_path = output_dir / f"scan_{market.lower()}{strategy_suffix}_{pd.Timestamp(asof).date().isoformat()}.csv"
     result.to_csv(output_path, index=False, encoding="utf-8-sig")

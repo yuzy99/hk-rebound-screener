@@ -1,0 +1,18 @@
+{
+  "market": "HK",
+  "strategy_mode": "industry_lag_rebound",
+  "price_adjust": "",
+  "history_days": 30,
+  "prior_return_max_pct": -5.0,
+  "industry_return_min_pct": 0.5,
+  "today_return_max_pct": 0.5,
+  "lag_min_pct": 1.5,
+  "min_signal_day_volume_shares": 500000,
+  "holding_period_trading_days": 3,
+  "entry_rule": "signal_next_trading_day_open",
+  "exit_rule": "third_holding_trading_day_close",
+  "screen_only": true,
+  "test_asof_date": "2026-09-02",
+  "append_forward_trading_days": 2,
+  "top_n": 20
+}

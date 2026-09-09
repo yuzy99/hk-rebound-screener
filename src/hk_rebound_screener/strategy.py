@@ -236,6 +236,47 @@ def evaluate_signal(
     result["industry_avg_return_pct"] = (industry_sum - result["daily_return_pct"]) / result["peer_count"]
     result["lag_vs_industry_pct"] = result["industry_avg_return_pct"] - result["daily_return_pct"]
 
+    if strategy_mode == "industry_lag_rebound":
+        industry_known = result["industry"].notna() & result["industry"].astype(str).str.strip().ne("")
+        result["industry_return_pct"] = result["industry_avg_return_pct"].where(
+            industry_known & result["peer_count"].ge(1)
+        )
+        result["industry_avg_return_pct"] = result["industry_return_pct"]
+        result["lag_vs_industry_pct"] = result["industry_return_pct"] - result["daily_return_pct"]
+        result["yesterday_return_pct"] = result["prior_return_pct"]
+        result["today_return_pct"] = result["daily_return_pct"]
+        result["industry_return_source"] = "peer_equal_weight"
+        result["prior_drop_ok"] = result["yesterday_return_pct"] <= float(config["prior_return_max_pct"])
+        result["industry_rebound_ok"] = result["industry_return_pct"] >= float(config["industry_return_min_pct"])
+        result["today_not_up_ok"] = result["today_return_pct"] <= float(config["today_return_max_pct"])
+        result["lag_ok"] = result["lag_vs_industry_pct"] >= float(config["lag_min_pct"])
+        result["signal_day_volume"] = pd.to_numeric(result["volume"], errors="coerce")
+        result["signal_volume_ok"] = result["signal_day_volume"].gt(
+            float(config.get("min_signal_day_volume_shares", 500000))
+        )
+        result["industry_data_ok"] = (
+            industry_known
+            & result["peer_count"].ge(1)
+            & result["yesterday_return_pct"].notna()
+            & result["today_return_pct"].notna()
+            & result["industry_return_pct"].notna()
+        )
+        result["passes"] = (
+            result["industry_data_ok"]
+            & result["prior_drop_ok"]
+            & result["industry_rebound_ok"]
+            & (result["today_not_up_ok"] | result["lag_ok"])
+            & result["signal_volume_ok"]
+        )
+        result["score"] = result["lag_vs_industry_pct"]
+        columns = [
+            "code", "name", "industry", "close", "yesterday_return_pct", "today_return_pct",
+            "industry_return_pct", "lag_vs_industry_pct", "industry_return_source", "peer_count",
+            "prior_drop_ok", "industry_rebound_ok", "today_not_up_ok", "lag_ok", "industry_data_ok",
+            "signal_day_volume", "signal_volume_ok", "score", "passes",
+        ]
+        return result[[column for column in columns if column in result]].sort_values("score", ascending=False)
+
     news_cutoff = _asof_end(asof) if asof is not None else _asof_end(today_date)
     scores = _news_scores(news, news_cutoff, config)
     result = result.merge(scores, on="code", how="left")
@@ -284,11 +325,10 @@ def evaluate_signal(
     )
 
     if strategy_mode == "two_day_drop":
-        # 兼容旧两日前前交易日跌幅
+        # 新策略只按跌幅、成交量异常和负面新闻评分，不再使用行业滞涨分。
         result["drop_strength_pct"] = result[["prior_return_pct", "daily_return_pct", "two_days_ago_return_pct"]].min(axis=1).abs()
         result["score"] = (
             float(weights.get("drop_strength", 1.0)) * result["drop_strength_pct"]
-            + float(weights.get("lag", 1.0)) * result["lag_vs_industry_pct"]
             + float(weights.get("volume_anomaly", 1.0)) * result["volume_anomaly"].fillna(0.0)
             - float(weights.get("negative_news", 1.0)) * result["negative_news_score"]
         )
@@ -299,15 +339,18 @@ def evaluate_signal(
     lot_known = result["lot_size"].notna() & (result["lot_size"] > 0)
     if config.get("strict_lot_size", True):
         lot_known &= result[lot_value_column].notna()
-    industry_known = result["industry"].notna() & result["industry"].astype(str).str.strip().ne("")
     common_filters = (
-        (result["peer_count"] >= int(config["min_industry_peers"]))
-        & industry_known
-        & (result["industry_avg_return_pct"] >= float(config["industry_mean_min_pct"]))
-        & (result[lot_value_column] <= max_lot_value)
+        (result[lot_value_column] <= max_lot_value)
         & news_clean
         & lot_known
     )
+    if strategy_mode != "two_day_drop":
+        industry_known = result["industry"].notna() & result["industry"].astype(str).str.strip().ne("")
+        common_filters &= (
+            (result["peer_count"] >= int(config["min_industry_peers"]))
+            & industry_known
+            & (result["industry_avg_return_pct"] > float(config.get("industry_mean_min_pct", 0.0)))
+        )
     if strategy_mode == "two_day_drop":
         liquidity = config.get("liquidity_filter", {})
         min_current_turnover = float(liquidity.get("min_current_turnover", 0.0))
@@ -331,18 +374,17 @@ def evaluate_signal(
             common_filters
             & result["large_drop_ok"]
             & result["consecutive_down_ok"]
-            & (result["industry_avg_return_pct"] >= float(config["industry_mean_min_pct"]))
-            & (result["lag_vs_industry_pct"] >= float(config["lag_min_pct"]))
             & result["liquidity_ok"]
         )
     else:
+        lag_condition = (
+            (result["lag_vs_industry_pct"] >= float(config.get("lag_min_pct", 1.0)))
+            | (result["daily_return_pct"] > 0.0)
+        )
         result["passes"] = (
             common_filters
             & result["two_day_drop_ok"]
-            & (
-                (result["daily_return_pct"] <= other_day_max_pct)
-                | (result["lag_vs_industry_pct"] >= float(config["lag_min_pct"]))
-            )
+            & lag_condition
         )
     columns = [
         "code", "name", "industry", "close", "lot_size", "lot_value_hkd", "prior_return_pct",
@@ -357,6 +399,43 @@ def evaluate_signal(
     if lot_value_column not in columns:
         columns.insert(6, lot_value_column)
     return result[[column for column in columns if column in result]].sort_values("score", ascending=False)
+
+
+def append_forward_observations(
+    result: pd.DataFrame,
+    prices: pd.DataFrame,
+    asof: object,
+    trading_days: int,
+) -> pd.DataFrame:
+    """Append post-signal prices for historical checks without affecting selection."""
+    if result.empty or trading_days <= 0:
+        return result
+
+    prepared = _prepare_prices(prices, {})
+    signal_date = pd.Timestamp(asof).normalize()
+    future_dates = [
+        pd.Timestamp(value)
+        for value in sorted(prepared["date"].dropna().unique())
+        if pd.Timestamp(value) > signal_date
+    ][:trading_days]
+    enriched = result.copy()
+    enriched["signal_date"] = signal_date.date().isoformat()
+    for offset in range(1, trading_days + 1):
+        date_column = f"forward_t{offset}_date"
+        close_column = f"forward_t{offset}_close"
+        return_column = f"forward_t{offset}_return_pct"
+        if offset > len(future_dates):
+            enriched[date_column] = pd.NA
+            enriched[close_column] = np.nan
+            enriched[return_column] = np.nan
+            continue
+        future_date = future_dates[offset - 1]
+        observation = prepared.loc[
+            prepared["date"].eq(future_date), ["code", "close", "daily_return_pct"]
+        ].rename(columns={"close": close_column, "daily_return_pct": return_column})
+        observation[date_column] = future_date.date().isoformat()
+        enriched = enriched.merge(observation, on="code", how="left")
+    return enriched
 
 
 def run_backtest(
