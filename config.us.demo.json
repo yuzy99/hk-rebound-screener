@@ -10,6 +10,7 @@
   "usd_hkd_rate": 7.84,
   "prior_drop_max_pct": -5.0,
   "large_drop_max_pct": -5.0,
+  "industry_avg_method": "median",
   "industry_mean_min_pct": 0.0,
   "lag_min_pct": 1.0,
   "today_return_max_pct": 0.5,

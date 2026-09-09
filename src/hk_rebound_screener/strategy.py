@@ -194,6 +194,75 @@ def _prepare_prices(prices: pd.DataFrame, config: dict[str, Any]) -> pd.DataFram
     return frame.sort_values(["code", "date"]).reset_index(drop=True)
 
 
+def _compute_industry_benchmark(
+    result: pd.DataFrame,
+    method: str = "median",
+) -> tuple[pd.Series, pd.Series]:
+    """计算行业基准涨跌幅与同行有效股票数。
+
+    参数 method 支持：
+    - 'median'（默认）：同行中位数。彻底免疫小盘仙股、除权未复权异常或个别妖股单日暴涨暴跌对行业均值的失真拉扯。
+    - 'trimmed_mean'：同行截断均值。同行数 >= 4 时剔除两端各 10% 极值后计算算术均值。
+    - 'turnover_weighted'：同行成交额加权平均值（资金体量加权）。
+    - 'mean'：传统同行等权算术平均值（兼容旧版）。
+    """
+    clean_industry = result["industry"].fillna("").astype(str).str.strip()
+    peer_count = pd.Series(0, index=result.index, dtype=int)
+    industry_benchmark = pd.Series(np.nan, index=result.index, dtype=float)
+
+    for industry_name, group in result.groupby(clean_industry):
+        if not industry_name:
+            continue
+        n = len(group)
+        if n <= 1:
+            continue
+        peer_count.loc[group.index] = n - 1
+        returns = pd.to_numeric(group["daily_return_pct"], errors="coerce").to_numpy(dtype=float)
+
+        if method == "mean":
+            total = np.nansum(returns)
+            benchmarks = (total - returns) / (n - 1)
+        elif method == "trimmed_mean":
+            benchmarks = np.zeros(n, dtype=float)
+            for i in range(n):
+                peer_vals = np.delete(returns, i)
+                valid = peer_vals[np.isfinite(peer_vals)]
+                if len(valid) >= 4:
+                    low, high = np.percentile(valid, [10, 90])
+                    trimmed = valid[(valid >= low) & (valid <= high)]
+                    benchmarks[i] = np.mean(trimmed) if len(trimmed) > 0 else np.mean(valid)
+                elif len(valid) > 0:
+                    benchmarks[i] = np.mean(valid)
+                else:
+                    benchmarks[i] = np.nan
+        elif method == "turnover_weighted":
+            benchmarks = np.zeros(n, dtype=float)
+            turnovers = (
+                pd.to_numeric(group["turnover"], errors="coerce").to_numpy(dtype=float)
+                if "turnover" in group
+                else np.ones(n, dtype=float)
+            )
+            for i in range(n):
+                peer_vals = np.delete(returns, i)
+                peer_to = np.delete(turnovers, i)
+                mask = np.isfinite(peer_vals) & np.isfinite(peer_to) & (peer_to > 0)
+                if np.any(mask):
+                    benchmarks[i] = np.average(peer_vals[mask], weights=peer_to[mask])
+                else:
+                    valid = peer_vals[np.isfinite(peer_vals)]
+                    benchmarks[i] = np.median(valid) if len(valid) > 0 else np.nan
+        else:  # default: "median"
+            benchmarks = np.zeros(n, dtype=float)
+            for i in range(n):
+                peer_vals = np.delete(returns, i)
+                valid = peer_vals[np.isfinite(peer_vals)]
+                benchmarks[i] = np.median(valid) if len(valid) > 0 else np.nan
+
+        industry_benchmark.loc[group.index] = benchmarks
+
+    return industry_benchmark, peer_count
+
+
 def evaluate_signal(
     prices: pd.DataFrame,
     universe: pd.DataFrame,
@@ -213,14 +282,14 @@ def evaluate_signal(
         return pd.DataFrame()
     today_date, prior_date = dates[-1], dates[-2]
     strategy_mode = str(config.get("strategy_mode", "rebound")).lower()
-    if strategy_mode == "two_day_drop" and len(dates) < 3:
+    if strategy_mode in {"two_day_drop", "industry_lag_rebound"} and len(dates) < 3:
         return pd.DataFrame()
     today = prepared.loc[prepared["date"] == today_date].copy()
     prior = prepared.loc[prepared["date"] == prior_date, ["code", "daily_return_pct"]].rename(
         columns={"daily_return_pct": "prior_return_pct"}
     )
     result = today.merge(prior, on="code", how="inner")
-    if strategy_mode == "two_day_drop":
+    if strategy_mode in {"two_day_drop", "industry_lag_rebound"}:
         two_days_ago_date = dates[-3]
         two_days_ago = prepared.loc[
             prepared["date"] == two_days_ago_date, ["code", "daily_return_pct"]
@@ -230,10 +299,11 @@ def evaluate_signal(
     if result.empty:
         return result
 
-    industry_sum = result.groupby("industry", dropna=False)["daily_return_pct"].transform("sum")
-    industry_count = result.groupby("industry", dropna=False)["daily_return_pct"].transform("count")
-    result["peer_count"] = industry_count - 1
-    result["industry_avg_return_pct"] = (industry_sum - result["daily_return_pct"]) / result["peer_count"]
+    default_method = "mean" if strategy_mode == "industry_lag_rebound" else "median"
+    industry_method = str(config.get("industry_avg_method", default_method)).lower()
+    result["industry_avg_return_pct"], result["peer_count"] = _compute_industry_benchmark(
+        result, method=industry_method
+    )
     result["lag_vs_industry_pct"] = result["industry_avg_return_pct"] - result["daily_return_pct"]
 
     if strategy_mode == "industry_lag_rebound":
@@ -244,9 +314,17 @@ def evaluate_signal(
         result["industry_avg_return_pct"] = result["industry_return_pct"]
         result["lag_vs_industry_pct"] = result["industry_return_pct"] - result["daily_return_pct"]
         result["yesterday_return_pct"] = result["prior_return_pct"]
+        result["day_before_yesterday_return_pct"] = result["two_days_ago_return_pct"]
         result["today_return_pct"] = result["daily_return_pct"]
         result["industry_return_source"] = "peer_equal_weight"
-        result["prior_drop_ok"] = result["yesterday_return_pct"] <= float(config["prior_return_max_pct"])
+        large_drop_max_pct = float(config["large_drop_max_pct"])
+        other_day_max_pct = float(config["other_prior_day_return_max_pct"])
+        result["prior_drop_ok"] = (
+            (result["yesterday_return_pct"].le(large_drop_max_pct)
+             & result["day_before_yesterday_return_pct"].le(other_day_max_pct))
+            | (result["day_before_yesterday_return_pct"].le(large_drop_max_pct)
+               & result["yesterday_return_pct"].le(other_day_max_pct))
+        )
         result["industry_rebound_ok"] = result["industry_return_pct"] >= float(config["industry_return_min_pct"])
         result["today_not_up_ok"] = result["today_return_pct"] <= float(config["today_return_max_pct"])
         result["lag_ok"] = result["lag_vs_industry_pct"] >= float(config["lag_min_pct"])
@@ -258,6 +336,7 @@ def evaluate_signal(
             industry_known
             & result["peer_count"].ge(1)
             & result["yesterday_return_pct"].notna()
+            & result["day_before_yesterday_return_pct"].notna()
             & result["today_return_pct"].notna()
             & result["industry_return_pct"].notna()
         )
@@ -270,7 +349,8 @@ def evaluate_signal(
         )
         result["score"] = result["lag_vs_industry_pct"]
         columns = [
-            "code", "name", "industry", "close", "yesterday_return_pct", "today_return_pct",
+            "code", "name", "industry", "close", "day_before_yesterday_return_pct",
+            "yesterday_return_pct", "today_return_pct",
             "industry_return_pct", "lag_vs_industry_pct", "industry_return_source", "peer_count",
             "prior_drop_ok", "industry_rebound_ok", "today_not_up_ok", "lag_ok", "industry_data_ok",
             "signal_day_volume", "signal_volume_ok", "score", "passes",

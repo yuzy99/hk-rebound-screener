@@ -223,9 +223,12 @@ def format_markdown_report(
         industry = _translate_industry(raw_industry)
         close = f"{float(row['close']):.3f}".rstrip("0").rstrip(".") + f" {currency}" if pd.notna(row.get("close")) else "-"
         prior_value = row.get("yesterday_return_pct", row.get("prior_return_pct"))
+        two_days_ago_value = row.get("day_before_yesterday_return_pct", row.get("two_days_ago_return_pct"))
         daily_value = row.get("today_return_pct", row.get("daily_return_pct"))
         industry_value = row.get("industry_return_pct", row.get("industry_avg_return_pct"))
         prior_ret = f"{float(prior_value):+.2f}%" if pd.notna(prior_value) else "-"
+        two_days_ago_ret = f"{float(two_days_ago_value):+.2f}%" if pd.notna(two_days_ago_value) else "-"
+        two_days_ago_ret = f"{float(two_days_ago_value):+.2f}%" if pd.notna(two_days_ago_value) else "-"
         daily_ret = f"{float(daily_value):+.2f}%" if pd.notna(daily_value) else "-"
         ind_avg = f"{float(industry_value):+.2f}%" if pd.notna(industry_value) else "-"
         lag = f"{float(row['lag_vs_industry_pct']):+.2f}%" if pd.notna(row.get("lag_vs_industry_pct")) else "-"
@@ -255,16 +258,35 @@ def format_markdown_report(
         pb_str = _format_pb(row.get("pb"))
 
         # 手机端全中文专属卡片视图
-        industry_label = "行业涨幅" if strategy_mode == "industry_lag_rebound" else "行业均值"
+        industry_method = str(config.get("industry_avg_method", "median")).lower()
+        if strategy_mode == "industry_lag_rebound":
+            industry_label = "行业涨幅"
+        elif industry_method == "median":
+            industry_label = "行业中位数"
+        elif industry_method == "trimmed_mean":
+            industry_label = "行业截断均值"
+        elif industry_method == "turnover_weighted":
+            industry_label = "行业加权均值"
+        else:
+            industry_label = "行业均值"
+
         source = ""
         if strategy_mode == "industry_lag_rebound" and row.get("industry_return_source") == "peer_equal_weight":
             source = "（股票池同行业等权平均）"
+
+        drop_window_line = (
+            [f"> 🗓️ **前天(T-2)涨跌**：`{two_days_ago_ret}`"]
+            if pd.notna(two_days_ago_value)
+            else []
+        )
+
         lines.extend([
             f"### {rank:02d}. `{code}` {name}",
             f"> 🏢 **所属行业**：{industry}",
             f"> 💰 **最新现价**：`{close}` ｜ **总市值**：`{market_cap_str}`",
             f"> 📊 **估值指标**：**PE** `{pe_str}` ｜ **PB** `{pb_str}`",
             f"> 📉 **两日涨跌**：**今日(T)** `{daily_ret}` ｜ **昨日(T-1)** `{prior_ret}`",
+            *drop_window_line,
             f"> 🎯 **{industry_label}**：`{ind_avg}`{source} ｜ **落后行业**：`{lag}`",
             f"> 📦 **策略今日成交量**：`{signal_volume}`",
             f"> 📈 **异动量比**：`{vol_ratio}` ｜ ⭐ **{score_label}**：**{score}**",

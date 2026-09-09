@@ -4,6 +4,7 @@ import pandas as pd
 import pytest
 
 from hk_rebound_screener.strategy import (
+    _compute_industry_benchmark,
     append_forward_observations,
     evaluate_signal,
     load_config,
@@ -249,11 +250,16 @@ def test_industry_lag_rebound_uses_sample_peer_average() -> None:
     assert tencent["industry_return_source"] == "peer_equal_weight"
     assert tencent["industry_return_pct"] == pytest.approx(1.5)
     assert tencent["yesterday_return_pct"] == pytest.approx(-6.0)
+    assert tencent["day_before_yesterday_return_pct"] == pytest.approx(0.990099, abs=1e-6)
     assert tencent["today_return_pct"] == pytest.approx(-0.500625, abs=1e-6)
     assert tencent["lag_vs_industry_pct"] == pytest.approx(2.000625, abs=1e-6)
     assert tencent["signal_day_volume"] == pytest.approx(4000000.0)
     assert bool(tencent["signal_volume_ok"])
-    assert bool(tencent["passes"])
+    assert not bool(tencent["prior_drop_ok"])
+    assert not bool(tencent["passes"])
+    meituan = result.loc[result["code"] == "03690"].iloc[0]
+    assert bool(meituan["prior_drop_ok"])
+    assert bool(meituan["passes"])
 
     from hk_rebound_screener.notifier import format_markdown_report
 
@@ -261,6 +267,7 @@ def test_industry_lag_rebound_uses_sample_peer_average() -> None:
     assert "行业涨幅" in report
     assert "股票池同行业等权平均" in report
     assert "落后行业" in report
+    assert "前天(T-2)涨跌" in report
     assert "仅生成筛选结果，不下单" in report
     assert "48 小时舆情" not in report
 
@@ -293,17 +300,17 @@ def test_forward_observations_are_appended_after_screening() -> None:
 
 def test_industry_lag_rebound_uses_only_requested_conditions() -> None:
     config = load_config(ROOT / "config.hk.industry_lag_rebound.json")
-    dates = pd.bdate_range(end="2026-09-02", periods=3)
+    dates = pd.bdate_range(end="2026-09-02", periods=4)
     specs = [
-        ("00001", "TodayFlat", "A", [100.0, 95.0, 95.0]),
-        ("00002", "PeerA1", "A", [100.0, 100.0, 102.0]),
-        ("00003", "PeerA2", "A", [100.0, 100.0, 101.0]),
-        ("00004", "LagOnly", "B", [100.0, 95.0, 95.5]),
-        ("00005", "PeerB", "B", [100.0, 100.0, 103.0]),
-        ("00006", "PriorTooSmall", "C", [100.0, 95.1, 94.0]),
-        ("00007", "IndustryCold", "D", [100.0, 94.0, 93.0]),
-        ("00008", "PeerD", "D", [100.0, 100.0, 100.5]),
-        ("00009", "MissingIndustry", "", [100.0, 94.0, 93.0]),
+        ("00001", "YesterdayDrop", "A", [100.0, 100.0, 95.0, 95.0]),
+        ("00002", "PeerA1", "A", [100.0, 100.0, 100.0, 102.0]),
+        ("00003", "PeerA2", "A", [100.0, 100.0, 100.0, 101.0]),
+        ("00004", "EarlierDrop", "B", [100.0, 94.0, 93.0, 93.5]),
+        ("00005", "PeerB", "B", [100.0, 100.0, 100.0, 103.0]),
+        ("00006", "PriorTooSmall", "C", [100.0, 100.0, 95.1, 94.0]),
+        ("00007", "IndustryCold", "D", [100.0, 100.0, 94.0, 93.0]),
+        ("00008", "PeerD", "D", [100.0, 100.0, 100.0, 100.5]),
+        ("00009", "MissingIndustry", "", [100.0, 100.0, 94.0, 93.0]),
     ]
     rows = []
     for code, _, _, closes in specs:
@@ -422,4 +429,32 @@ def test_industry_mean_and_lag_or_positive_rule() -> None:
     # 00010 淘汰（行业均值等于 0，不满足大于 0）
     assert r10["industry_avg_return_pct"] == pytest.approx(0.0)
     assert not bool(r10["passes"])
+
+
+def test_industry_benchmark_methods_and_outlier_resilience() -> None:
+    """验证行业基准计算对仙股/妖股极值的免疫能力（中位数与截断均值）"""
+    # 模拟一个 10 只股票的行业，其中 9 只股票微涨微跌在 0%~0.6%，1 只妖股暴涨 +800%
+    data = pd.DataFrame({
+        "industry": ["SpecialtyMachinery"] * 10,
+        "daily_return_pct": [0.2, 0.3, 0.4, 0.1, 0.5, 0.2, 0.3, -0.1, 0.4, 800.0],
+        "turnover": [1e6] * 9 + [1e3],  # 妖股成交额很小
+    })
+
+    # 1. 传统 mean 模式：均值被暴拉至 80% 以上
+    mean_bench, peer_count = _compute_industry_benchmark(data, method="mean")
+    assert peer_count.iloc[0] == 9
+    assert mean_bench.iloc[0] > 80.0  # 严重失真
+
+    # 2. median 模式（默认）：完全免疫暴涨 800% 的极值
+    median_bench, _ = _compute_industry_benchmark(data, method="median")
+    assert median_bench.iloc[0] == pytest.approx(0.3)  # 中位数稳定在 0.3%
+    assert median_bench.iloc[1] == pytest.approx(0.3)
+
+    # 3. trimmed_mean 模式：剔除 10% 极值后均值回归正常
+    trimmed_bench, _ = _compute_industry_benchmark(data, method="trimmed_mean")
+    assert trimmed_bench.iloc[0] < 1.0  # 极值被剔除，均值在正常区间
+
+    # 4. turnover_weighted 模式：资金加权后妖股影响微乎其微
+    weighted_bench, _ = _compute_industry_benchmark(data, method="turnover_weighted")
+    assert weighted_bench.iloc[0] < 1.0
 
