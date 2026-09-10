@@ -204,11 +204,25 @@ def format_markdown_report(
     lines: list[str] = [
         f"## 📊 {market_upper} 市场选股简报 ({asof})",
         "",
+    ]
+
+    if not passed.empty:
+        passed_codes = [str(code).strip() for code in passed["code"].tolist()]
+        lines.extend([
+            f"## 命中股票代码（共 {len(passed_codes)} 只）",
+            "",
+        ])
+        for start in range(0, len(passed_codes), 8):
+            code_chunk = passed_codes[start : start + 8]
+            lines.append(" ｜ ".join(f"`{code}`" for code in code_chunk))
+        lines.append("")
+
+    lines.extend([
         f"- **运行策略**：{strategy_title} (`{strategy_mode}`)",
         f"- **扫描基准日期**：`{asof}`",
         f"- **命中符合条件标的**：**{len(passed)}** 只",
         "",
-    ]
+    ])
 
     if strategy_mode == "industry_lag_rebound":
         lines.extend([
@@ -235,8 +249,7 @@ def format_markdown_report(
         ])
         return "\n".join(lines)
 
-    lines.append("---")
-    lines.append("")
+    lines.extend(["---", ""])
 
     for rank, (_, row) in enumerate(passed.iterrows(), start=1):
         code = str(row.get("code", "")).strip()
