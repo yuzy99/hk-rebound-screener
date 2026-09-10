@@ -205,6 +205,40 @@ def test_two_day_drop_strategy_filters_out_intermittent_trading_days() -> None:
     assert not bool(sparse["passes"])
 
 
+def test_zero_prior_volume_does_not_crash_strategy() -> None:
+    config = load_config(ROOT / "config.hk.two_day_drop.json")
+    dates = pd.bdate_range(end="2026-09-02", periods=24)
+    prices = pd.DataFrame(
+        [
+            {
+                "date": date,
+                "code": "00001",
+                "close": close,
+                "volume": 0.0 if index < 20 else 1000.0,
+                "turnover": 0.0 if index < 20 else 100000.0,
+            }
+            for index, (date, close) in enumerate(
+                zip(dates, [100.0] * 21 + [94.0, 92.0, 90.0])
+            )
+        ]
+    )
+    universe = pd.DataFrame(
+        {
+            "code": ["00001"],
+            "name": ["ZeroPriorVolume"],
+            "industry": [""],
+            "lot_size": [100.0],
+            "enabled": [True],
+        }
+    )
+    news = pd.DataFrame(columns=["code", "published_at", "title", "body", "url"])
+
+    result = evaluate_signal(prices, universe, news, config, asof="2026-09-02")
+
+    assert pd.isna(result.iloc[0]["volume_ratio"])
+    assert not bool(result.iloc[0]["liquidity_ok"])
+
+
 def test_notifier_markdown_report_and_step_summary(tmp_path: Path, monkeypatch) -> None:
     from hk_rebound_screener.notifier import format_markdown_report, write_step_summary
 

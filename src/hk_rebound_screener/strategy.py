@@ -203,7 +203,9 @@ def _prepare_prices(prices: pd.DataFrame, config: dict[str, Any]) -> pd.DataFram
                 lambda window: float((window > 0).sum()), raw=True
             )
         )
-        aligned["volume_ratio"] = aligned["volume"] / aligned["prior_volume_median"]
+        aligned["volume_ratio"] = aligned["volume"].div(
+            aligned["prior_volume_median"].replace(0, np.nan)
+        )
         aligned["volume_anomaly"] = (aligned["volume_ratio"] - 1.0).clip(lower=0.0)
         frame = aligned.reset_index().dropna(subset=["date", "code", "close"])
     else:
@@ -220,7 +222,9 @@ def _prepare_prices(prices: pd.DataFrame, config: dict[str, Any]) -> pd.DataFram
                 lambda window: float((window > 0).sum()), raw=True
             )
         )
-        frame["volume_ratio"] = frame["volume"] / frame["prior_volume_median"]
+        frame["volume_ratio"] = frame["volume"].div(
+            frame["prior_volume_median"].replace(0, np.nan)
+        )
         frame["volume_anomaly"] = (frame["volume_ratio"] - 1.0).clip(lower=0.0)
 
     return frame.sort_values(["code", "date"]).reset_index(drop=True)
