@@ -17,6 +17,5 @@
   "exit_rule": "third_holding_trading_day_close",
   "screen_only": true,
   "test_asof_date": "2026-09-02",
-  "append_forward_trading_days": 2,
-  "top_n": 20
+  "append_forward_trading_days": 2
 }

@@ -596,7 +596,7 @@ def run_backtest(
     for index in range(warmup, len(dates) - 1):
         signal_date = pd.Timestamp(dates[index])
         picks = evaluate_signal(prepared, universe, news, config, asof=signal_date)
-        picks = picks.loc[picks["passes"]].head(int(config["top_n"]))
+        picks = picks.loc[picks["passes"]]
         if picks.empty:
             continue
         next_date = pd.Timestamp(dates[index + 1])

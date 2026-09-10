@@ -18,7 +18,6 @@
   "negative_news_threshold": 5.0,
   "strict_lot_size": true,
   "strict_news_fetch": true,
-  "top_n": 20,
   "score_weights": {
     "prior_drop_abs": 1.0,
     "lag": 1.0,

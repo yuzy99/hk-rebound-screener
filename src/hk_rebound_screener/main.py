@@ -245,7 +245,7 @@ def main() -> None:
     strategy_suffix = "" if strategy_mode == "rebound" else f"_{strategy_mode}"
     output_path = output_dir / f"scan_{market.lower()}{strategy_suffix}_{pd.Timestamp(asof).date().isoformat()}.csv"
     result.to_csv(output_path, index=False, encoding="utf-8-sig")
-    passed = result.loc[result["passes"]].head(int(config["top_n"]))
+    passed = result.loc[result["passes"]]
     print(f"扫描日期: {asof}; 输出: {output_path}")
     if passed.empty:
         print("没有同时满足全部条件的标的。")
