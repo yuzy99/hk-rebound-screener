@@ -128,31 +128,31 @@ def _news_scores(news: pd.DataFrame, asof: object, config: dict[str, Any]) -> pd
     start = end - pd.Timedelta(hours=float(config["news_lookback_hours"]))
     window = news.loc[(news["published_at"] >= start) & (news["published_at"] <= end)].copy()
     rules = config.get("news_rules", {})
-    results: list[dict[str, object]] = []
+    category_weights = {
+        category: float(rule.get("weight", 0.0))
+        for category, rule in rules.items()
+    }
+    matched_by_code: dict[str, set[str]] = {}
     for row in window.itertuples(index=False):
         text = f"{row.title} {row.body}".lower()
         matched: list[str] = []
-        score = 0.0
         for category, rule in rules.items():
             terms = [str(term).lower() for term in rule.get("terms", [])]
             if any(term in text for term in terms):
                 matched.append(category)
-                score += float(rule.get("weight", 0.0))
         if matched:
-            results.append({
-                "code": row.code,
-                "negative_news_score": score,
-                "negative_news_hits": ";".join(matched),
-            })
-    if not results:
+            matched_by_code.setdefault(row.code, set()).update(matched)
+    if not matched_by_code:
         return pd.DataFrame(columns=["code", "negative_news_score", "negative_news_hits"])
-    return (
-        pd.DataFrame(results)
-        .groupby("code", as_index=False)
-        .agg(
-            negative_news_score=("negative_news_score", "sum"),
-            negative_news_hits=("negative_news_hits", lambda values: ";".join(sorted(set(";".join(values).split(";"))))),
-        )
+    return pd.DataFrame(
+        [
+            {
+                "code": code,
+                "negative_news_score": sum(category_weights.get(category, 0.0) for category in categories),
+                "negative_news_hits": ";".join(sorted(categories)),
+            }
+            for code, categories in matched_by_code.items()
+        ]
     )
 
 
@@ -466,10 +466,26 @@ def evaluate_signal(
     if strategy_mode == "two_day_drop":
         # 保留旧字段名以兼容已有输出，但策略窗口改为最近三个交易日。
         result["drop_strength_pct"] = result[["prior_return_pct", "daily_return_pct", "two_days_ago_return_pct"]].min(axis=1).abs()
+        score_parameters = config.get("score_parameters", {})
+        drop_cap_pct = float(score_parameters.get("drop_cap_pct", 15.0))
+        volume_log_weight = float(score_parameters.get("volume_log_weight", 2.0))
+        volume_ratio_cap = float(score_parameters.get("volume_ratio_cap", 8.0))
+
+        drop_strength = pd.to_numeric(result["drop_strength_pct"], errors="coerce")
+        drop_component = drop_strength.where(np.isfinite(drop_strength), 0.0).clip(
+            lower=0.0,
+            upper=drop_cap_pct,
+        )
+        volume_ratio = pd.to_numeric(result["volume_ratio"], errors="coerce")
+        volume_component = (
+            volume_log_weight * np.log2(volume_ratio.clip(lower=1.0, upper=volume_ratio_cap))
+        ).where(np.isfinite(volume_ratio), 0.0)
+        news_risk = pd.to_numeric(result["negative_news_score"], errors="coerce")
+        news_risk = news_risk.where(np.isfinite(news_risk), 0.0)
         result["score"] = (
-            float(weights.get("drop_strength", 1.0)) * result["drop_strength_pct"]
-            + float(weights.get("volume_anomaly", 1.0)) * result["volume_anomaly"].fillna(0.0)
-            - float(weights.get("negative_news", 1.0)) * result["negative_news_score"]
+            drop_component
+            + volume_component
+            - news_risk
         )
 
     news_clean = result["negative_news_score"] < float(config["negative_news_threshold"])

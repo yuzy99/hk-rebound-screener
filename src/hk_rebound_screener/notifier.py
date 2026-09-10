@@ -258,6 +258,10 @@ def format_markdown_report(
     strategy_title = strategy_titles.get(strategy_mode, strategy_mode)
     market_upper = market.upper()
     currency = "USD" if market_upper == "US" else "HKD"
+    score_parameters = config.get("score_parameters", {})
+    drop_cap_pct = float(score_parameters.get("drop_cap_pct", 15.0))
+    volume_log_weight = float(score_parameters.get("volume_log_weight", 2.0))
+    volume_ratio_cap = float(score_parameters.get("volume_ratio_cap", 8.0))
 
     passed = result.loc[result["passes"]].copy() if not result.empty and "passes" in result.columns else pd.DataFrame()
 
@@ -293,6 +297,8 @@ def format_markdown_report(
     elif strategy_mode == "two_day_drop":
         lines.extend([
             "- **三日筛选规则**：最近三个交易日中至少一日跌幅 ≤ −5%，其余两日涨跌幅均 ≤ +0.5%",
+            f"- **评分公式**：`S = min(D, {drop_cap_pct:g}) + {volume_log_weight:g} × log₂(min(max(R, 1), {volume_ratio_cap:g})) − N`",
+            f"- **评分定义**：`D` 为最近三日最大跌幅绝对值（百分点，最高 {drop_cap_pct:g} 分）；`R` 为有效量比（1 倍以下不加分，{volume_ratio_cap:g} 倍封顶）；`N` 为 48 小时内按风险类别去重后的新闻风险分。",
             "",
         ])
 

@@ -4,6 +4,7 @@ import pandas as pd
 
 from hk_rebound_screener.notifier import (
     format_report_link_notification,
+    format_markdown_report,
     render_html_report,
 )
 
@@ -47,3 +48,29 @@ def test_render_html_report_replaces_only_raw_data_and_market_placeholders(tmp_p
     assert "old data" not in content
     assert "### 001. 00001" in content
     assert '<style>.keep{color:red}</style>' in content
+
+
+def test_current_score_formula_is_in_markdown_and_html_report(tmp_path: Path) -> None:
+    from hk_rebound_screener.strategy import load_config
+
+    config = load_config(Path(__file__).resolve().parents[1] / "config.hk.two_day_drop.json")
+    report = format_markdown_report(
+        pd.DataFrame(columns=["passes"]),
+        market="HK",
+        asof="2026-09-10",
+        config=config,
+    )
+    assert "S = min(D, 15) + 2 × log₂(min(max(R, 1), 8)) − N" in report
+    assert "按风险类别去重" in report
+
+    output_path = tmp_path / "hk_latest.html"
+    render_html_report(
+        report,
+        market="HK",
+        asof="2026-09-10",
+        template_path=Path(__file__).resolve().parents[1] / "templates" / "stock_report_template.html",
+        output_path=output_path,
+    )
+    html = output_path.read_text(encoding="utf-8")
+    assert "当前评分公式" in html
+    assert "S = min(D, 15) + 2 × log₂(min(max(R, 1), 8)) − N" in html

@@ -136,6 +136,92 @@ def test_two_day_drop_strategy_uses_three_trading_day_window() -> None:
     assert not bool(no_drop["passes"])
 
 
+def test_two_day_drop_score_caps_drop_and_log_scales_volume() -> None:
+    config = load_config(ROOT / "config.hk.two_day_drop.json")
+    dates = pd.bdate_range(end="2026-09-02", periods=24)
+    volume_ratios = [1.0, 2.0, 4.0, 8.0]
+    codes = [f"0000{index}" for index in range(1, 5)]
+    prices = pd.DataFrame(
+        [
+            {
+                "date": date,
+                "code": code,
+                "close": close,
+                "volume": 40000.0 if date != dates[-1] else 40000.0 * ratio,
+            }
+            for code, ratio in zip(codes, volume_ratios)
+            for date, close in zip(dates, [100.0] * 21 + [80.0, 79.0, 78.21])
+        ]
+    )
+    universe = pd.DataFrame(
+        {
+            "code": codes,
+            "name": codes,
+            "industry": ["Tech"] * len(codes),
+            "lot_size": [100.0] * len(codes),
+            "enabled": [True] * len(codes),
+        }
+    )
+    news = pd.DataFrame(columns=["code", "published_at", "title", "body", "url"])
+
+    result = evaluate_signal(prices, universe, news, config, asof="2026-09-02")
+
+    scores = result.set_index("code")["score"]
+    assert scores["00001"] == pytest.approx(15.0)
+    assert scores["00002"] == pytest.approx(17.0)
+    assert scores["00003"] == pytest.approx(19.0)
+    assert scores["00004"] == pytest.approx(21.0)
+    assert result["passes"].all()
+
+
+def test_negative_news_score_deduplicates_repeated_risk_categories() -> None:
+    config = load_config(ROOT / "config.hk.two_day_drop.json")
+    dates = pd.bdate_range(end="2026-09-02", periods=24)
+    prices = pd.DataFrame(
+        [
+            {"date": date, "code": "00001", "close": close, "volume": 40000.0}
+            for date, close in zip(dates, [100.0] * 21 + [94.0, 92.0, 90.0])
+        ]
+    )
+    universe = pd.DataFrame(
+        {
+            "code": ["00001"],
+            "name": ["RepeatedNews"],
+            "industry": ["Tech"],
+            "lot_size": [100.0],
+            "enabled": [True],
+        }
+    )
+    news = pd.DataFrame(
+        [
+            {
+                "code": "00001",
+                "published_at": "2026-09-02T09:00:00+08:00",
+                "title": "重大诉讼公告",
+                "body": "同一风险事件的报道一",
+                "url": "https://example.invalid/1",
+            },
+            {
+                "code": "00001",
+                "published_at": "2026-09-02T10:00:00+08:00",
+                "title": "重大诉讼进展",
+                "body": "同一风险事件的报道二",
+                "url": "https://example.invalid/2",
+            },
+        ]
+    )
+    news["published_at"] = pd.to_datetime(news["published_at"]).dt.tz_convert(
+        "Asia/Hong_Kong"
+    ).dt.tz_localize(None)
+
+    result = evaluate_signal(prices, universe, news, config, asof="2026-09-02")
+
+    row = result.iloc[0]
+    assert row["negative_news_score"] == pytest.approx(5.0)
+    assert row["negative_news_hits"] == "major_litigation"
+    assert not bool(row["passes"])
+
+
 def test_two_day_drop_strategy_does_not_require_industry_filters() -> None:
     config = load_config(ROOT / "config.hk.two_day_drop.json")
     dates = pd.bdate_range(end="2026-09-02", periods=24)
