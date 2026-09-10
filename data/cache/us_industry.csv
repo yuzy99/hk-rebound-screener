@@ -227,7 +227,7 @@ ALMU,Semiconductors,"Aeluma, Inc. - Common Stock"
 ALNT,Electronic Components,Allient Inc. - Common Stock
 ALNY,Biotechnology,"Alnylam Pharmaceuticals, Inc. - Common Stock"
 ALOY,Other Industrial Metals & Mining,REalloys Inc. - Common Stock
-ALP,Asset Management,Alpha Compute Corp  - Common Stock
+ALP,Asset Management,Alpha Compute Corp  - Ordinary Shares
 ALPS,Biotechnology,ALPS Group Inc - Ordinary Share
 ALPX,Shell Companies,Alpex Acquisition Corporation - Class A Ordinary Shares
 ALRM,Software—Application,"Alarm.com Holdings, Inc. - Common Stock"
@@ -244,6 +244,7 @@ ALX,REIT—Retail,"Alexander's, Inc. Common Stock"
 ALXO,Biotechnology,ALX Oncology Holdings Inc. - Common Stock
 ALZN,Biotechnology,"Alzamend Neuro, Inc. - Common Stock"
 AM,Oil & Gas Midstream,Antero Midstream Corporation Common Stock
+AMAC,Shell Companies,AMR Resources Acquisition Corp - Class A Ordinary Shares
 AMAL,Banks—Regional,Amalgamated Financial Corp. - Common Stock
 AMAN,Shell Companies,Amanat Acquisition Corp - Class A Ordinary Shares
 AMAT,Semiconductor Equipment & Materials,"Applied Materials, Inc. - Common Stock"
@@ -393,7 +394,7 @@ AS,Leisure,"Amer Sports, Inc. Ordinary Shares"
 ASA,Asset Management,ASA  Gold and Precious Metals Limited
 ASAN,Software—Application,"Asana, Inc. Class A Common Stock"
 ASB,Banks—Regional,Associated Banc-Corp Common Stock
-ASBP,Biotechnology,"Aspire Biopharma Holdings, Inc.  - Common Stock"
+ASBP,Biotechnology,"Aspire-Lakewood Holdings, Inc. - Common Stock"
 ASC,Marine Shipping,Ardmore Shipping Corporation Common Stock
 ASH,Specialty Chemicals,Ashland Inc. Common Stock
 ASIC,Insurance—Property & Casualty,Ategrity Specialty Insurance Company Holdings Common Stock
@@ -466,6 +467,7 @@ AURA,Biotechnology,"Aura Biosciences, Inc. - Common Stock"
 AURE,Capital Markets,Aurelion Inc.  - Class A Ordinary Shares
 AUST,Gold,Austin Gold Corp. Common Shares
 AUUD,Software—Application,Auddia Inc. - Common Stock
+AUXX,Gold,Gold X2 Mining Inc. Common Shares
 AVA,Utilities—Diversified,Avista Corporation Common Stock
 AVAH,Medical Care Facilities,Aveanna Healthcare Holdings Inc. - Common Stock
 AVAT,Asset Management,Avalanche Treasury Corporation - Class A Common Stock
@@ -769,7 +771,6 @@ BSRR,Banks—Regional,Sierra Bancorp - Common Stock
 BSVN,Banks—Regional,Bank7 Corp. - Common stock
 BSX,Medical Devices,Boston Scientific Corporation Common Stock
 BSY,Software—Application,"Bentley Systems, Incorporated - Class B Common Stock"
-BTAI,Drug Manufacturers—Specialty & Generic,"BioXcel Therapeutics, Inc. - Common Stock"
 BTBD,Restaurants,"BT Brands, Inc. - Common Stock"
 BTBT,Capital Markets,"Bit Digital, Inc. - Ordinary Share"
 BTCS,Capital Markets,BTCS Inc. - Common Stock
@@ -1280,7 +1281,6 @@ CXM,Software—Application,"Sprinklr, Inc. Class A Common Stock"
 CXT,Specialty Industrial Machinery,"Crane NXT, Co. Common Stock"
 CXW,Security & Protection Services,"CoreCivic, Inc. Common Stock"
 CYAB,Software—Infrastructure,"Cyabra, Inc. - Common Stock"
-CYCN,Biotechnology,"Cyclerion Therapeutics, Inc. - Common Stock"
 CYCU,Information Technology Services,"Cycurion, Inc. - Common Stock"
 CYD,Auto Manufacturers,China Yuchai International Limited Common Stock
 CYN,Software—Application,Cyngn Inc. - Common stock
@@ -2206,7 +2206,7 @@ HON,Conglomerates,Honeywell International Inc. - Common Stock
 HONA,Aerospace & Defense,Honeywell Aerospace Inc. - Common Stock
 HOOD,Capital Markets,"Robinhood Markets, Inc. - Class A Common Stock"
 HOPE,Banks—Regional,"Hope Bancorp, Inc. - Common Stock"
-HOS,,"Hornbeck Offshore Services, Inc. Common Stock"
+HOS,Marine Shipping,"Hornbeck Offshore Services, Inc. Common Stock"
 HOUR,Internet Retail,"Hour Loop, Inc. - common stock"
 HOV,Residential Construction,"Hovnanian Enterprises, Inc. Class A Common Stock"
 HOVR,Aerospace & Defense,New Horizon Aircraft Ltd. - Class A Ordinary Shares
@@ -2362,7 +2362,7 @@ IMUX,Biotechnology,"Immunic, Inc.  - Common Stock"
 IMVT,Biotechnology,"Immunovant, Inc.  - Common Stock"
 IMXI,Software—Infrastructure,"International Money Express, Inc. - Common Stock"
 INAB,Biotechnology,"IN8bio, Inc. - Common Stock"
-INAC,,Indigo Acquisition Corp. - Ordinary Shares
+INAC,Shell Companies,Indigo Acquisition Corp. - Ordinary Shares
 INBK,Banks—Regional,First Internet Bancorp - Common Stock
 INBS,Medical Devices,Intelligent Bio Solutions Inc.  - Common Stock
 INBX,Biotechnology,"Inhibrx Biosciences, Inc. - Common Stock"
@@ -2520,7 +2520,7 @@ JNJ,Drug Manufacturers—General,Johnson & Johnson Common Stock
 JOB,Staffing & Employment Services,GEE Group Inc. Common Stock
 JOBY,Airports & Air Services,"Joby Aviation, Inc. Common Stock"
 JOE,Real Estate—Diversified,St. Joe Company (The) Common Stock
-JONE,,Jones Ventures INTL Acquisition1 Corp - Class A Ordinary Shares
+JONE,Shell Companies,Jones Ventures INTL Acquisition1 Corp - Class A Ordinary Shares
 JOUT,Leisure,Johnson Outdoors Inc. - Class A Common Stock
 JPM,Banks—Diversified,JP Morgan Chase & Co. Common Stock
 JRSH,Apparel Manufacturing,"Jerash Holdings (US), Inc. - Common Stock"
@@ -2626,6 +2626,7 @@ KRNY,Banks—Regional,Kearny Financial - Common Stock
 KRO,Specialty Chemicals,Kronos Worldwide Inc Common Stock
 KROS,Biotechnology,"Keros Therapeutics, Inc. - common stock"
 KRRO,Biotechnology,"Korro Bio, Inc. - Common Stock"
+KRSA,Biotechnology,"Korsana Biosciences, Inc. - Common Stock"
 KRSP,Shell Companies,Rice Acquisition Corporation 3 Class A Ordinary Shares
 KRT,Packaging & Containers,Karat Packaging Inc. - Common Stock
 KRUS,Restaurants,"Kura Sushi USA, Inc. - Class A Common Stock"
@@ -2645,7 +2646,6 @@ KUST,Entertainment,"Kustom Entertainment, Inc. - Common Stock"
 KVHI,Telecom Services,"KVH Industries, Inc. - Common Stock"
 KVUE,Household & Personal Products,Kenvue Inc. Common Stock
 KVYO,Software—Application,"Klaviyo, Inc. Series A Common Stock"
-KWM,Entertainment,"K Wave Media, Ltd. - Ordinary Shares"
 KWR,Specialty Chemicals,Quaker Houghton Common Stock
 KWY,Asset Management,Kingsway Corporation Common Stock
 KXIN,Auto & Truck Dealerships,Kaixin Holdings - Ordinary Shares
@@ -2680,7 +2680,7 @@ LBRX,Biotechnology,LB Pharmaceuticals Inc - Common Stock
 LBTYA,Telecom Services,Liberty Global Ltd. - Class A Common Shares
 LBTYB,Telecom Services,Liberty Global Ltd. - Class B Common Shares
 LBTYK,Telecom Services,Liberty Global Ltd. - Class C Common Shares
-LCCC,,Lakeshore Acquisition III Corp. - Ordinary Shares
+LCCC,Shell Companies,Lakeshore Acquisition III Corp. - Ordinary Shares
 LCFY,Internet Content & Information,Locafy Limited - Ordinary Share
 LCID,Auto Manufacturers,"Lucid Group, Inc. - Common Stock"
 LCII,Recreational Vehicles,LCI Industries
@@ -2791,7 +2791,6 @@ LPCV,Shell Companies,Launchpad Cadenza Acquisition Corp I - Class A Ordinary Sha
 LPG,Oil & Gas Midstream,Dorian LPG Ltd. Common Stock
 LPL,Consumer Electronics,"LG Display Co, Ltd AMERICAN DEPOSITORY SHARES"
 LPLA,Capital Markets,LPL Financial Holdings Inc. - Common Stock
-LPSN,Software—Application,"LivePerson, Inc. - Common Stock"
 LPTH,Electronic Components,"LightPath Technologies, Inc. - Class A Common Stock"
 LPX,Building Products & Equipment,Louisiana-Pacific Corporation Common Stock
 LQDA,Drug Manufacturers—Specialty & Generic,Liquidia Corporation - Common Stock
@@ -3240,7 +3239,7 @@ NMAX,Broadcasting,"Newsmax, Inc. Class B Common Stock"
 NMFC,Asset Management,New Mountain Finance Corporation - Common Stock
 NMG,Other Industrial Metals & Mining,Nouveau Monde Graphite Inc. Common Shares
 NMIH,Insurance—Specialty,NMI Holdings Inc - Common Stock
-NMP,,NMP Acquisition Corp. - Class A Ordinary Shares
+NMP,Shell Companies,NMP Acquisition Corp. - Class A Ordinary Shares
 NMRA,Biotechnology,"Neumora Therapeutics, Inc. - Common Stock"
 NMRK,Real Estate Services,"Newmark Group, Inc. - Class A Common Stock"
 NMTC,Medical Devices,NeuroOne Medical Technologies Corporation - Common Stock
@@ -3348,6 +3347,7 @@ NWS,Entertainment,News Corporation - Class B Common Stock
 NWSA,Entertainment,News Corporation - Class A Common Stock
 NWTG,Leisure,"Newton Golf Company, Inc. - Common Stock"
 NX,Building Products & Equipment,Quanex Building Products Corporation Common Stock
+NXAT,,Nexus Advanced Technologies Inc. - Ordinary Shares
 NXB,Auto & Truck Dealerships,NextBoat Inc. Common Stcok
 NXDR,Internet Content & Information,"Nextdoor Holdings, Inc. Class A Common Stock"
 NXE,Uranium,Nexgen Energy Ltd. Common Shares
@@ -3624,7 +3624,7 @@ PGY,Software—Infrastructure,Pagaya Technologies Ltd. - Class A Ordinary Shares
 PH,Specialty Industrial Machinery,Parker-Hannifin Corporation Common Stock
 PHAT,Biotechnology,"Phathom Pharmaceuticals, Inc. - Common Stock"
 PHG,Medical Devices,Koninklijke Philips N.V. NY Registry Shares
-PHGE,Aerospace & Defense,BiomX Inc. COmmon Stock
+PHGE,Aerospace & Defense,BiomX Inc. Common Stock
 PHI,Telecom Services,PLDT Inc. Sponsored ADR
 PHIN,Auto Parts,PHINIA Inc. Common Stock
 PHIO,Biotechnology,Phio Pharmaceuticals Corp. - Common Stock
@@ -4101,7 +4101,7 @@ SCCO,Copper,Southern Copper Corporation Common Stock
 SCHL,Publishing,Scholastic Corporation - Common Stock
 SCHW,Capital Markets,Charles Schwab Corporation (The) Common Stock
 SCI,Personal Services,Service Corporation International Common Stock
-SCII,,SC II Acquisition Corp. - Class A ordinary share
+SCII,Shell Companies,SC II Acquisition Corp. - Class A ordinary share
 SCKT,Computer Hardware,"Socket Mobile, Inc. - Common Stock"
 SCL,Specialty Chemicals,Stepan Company Common Stock
 SCLX,Drug Manufacturers—General,Scilex Holding Company - Common Stock
@@ -4166,7 +4166,7 @@ SGLY,Integrated Freight & Logistics,Singularity Future Technology Ltd. - Common 
 SGML,Other Industrial Metals & Mining,Sigma Lithium Corporation - common shares
 SGMT,Biotechnology,Sagimet Biosciences Inc. - Series A Common Stock
 SGP,Biotechnology,"SpyGlass Pharma, Inc. - Common Stock"
-SGRX,,SANGRIX INC. - Class A Ordinary Shares
+SGRX,Information Technology Services,SANGRIX INC. - Class A Ordinary Shares
 SGRY,Medical Care Facilities,"Surgery Partners, Inc. - Common Stock"
 SGU,Oil & Gas Refining & Marketing,Star Group L.P. Common Stock
 SHAK,Restaurants,"Shake Shack, Inc. Class A Common Stock"
@@ -4312,7 +4312,7 @@ SONO,Consumer Electronics,"Sonos, Inc. - Common Stock"
 SOPH,Health Information Services,SOPHiA GENETICS SA - Ordinary Shares
 SOR,Asset Management,"Source Capital, Inc. Cmn Shs of BI"
 SORA,Luxury Goods,AsiaStrategy - Ordinary Shares
-SORN,,Soren Acquisition Corp. - Class A Ordinary Shares
+SORN,Shell Companies,Soren Acquisition Corp. - Class A Ordinary Shares
 SOS,Capital Markets,SOS Limited Class A Ordinary Shares
 SOTK,Scientific & Technical Instruments,Sono-Tek Corporation - Common Stock
 SOUL,Shell Companies,Soulpower Acquisition Corporation Class A Ordinary Shares
@@ -5096,7 +5096,7 @@ XRX,Business Equipment & Supplies,Xerox Holdings Corporation - Common Stock
 XSLL,Shell Companies,Xsolla SPAC 1 - Class A Ordinary Shares
 XTER,Shell Companies,Karman Line Acquisition Corp. - Class A Ordinary Shares
 XTIA,Aerospace & Defense,"XTI Aerospace, Inc. Common Stock  - Common Stock"
-XTND,,"Xtend AI Robotics, Inc. Common Stock"
+XTND,Computer Hardware,"Xtend AI Robotics, Inc. Common Stock"
 XTNT,Medical Devices,"Xtant Medical Holdings, Inc. Common Stock"
 XWEL,Diagnostics & Research,"XWELL, Inc. - Common Stock"
 XXI,Education & Training Services,"Twenty One Capital, Inc. Class A Common Stock"

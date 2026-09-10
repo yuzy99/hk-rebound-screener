@@ -9,14 +9,6 @@ on:
     - cron: "30 8 * * 1-5"
   workflow_dispatch:
     inputs:
-      config_file:
-        description: "选择港股筛选策略"
-        required: false
-        default: "config.json (经典超跌反弹)"
-        type: choice
-        options:
-          - "config.json (经典超跌反弹)"
-          - "config.hk.two_day_drop.json (双日下跌+流动性)"
       refresh_metadata:
         description: "重新建立港股行业元数据缓存"
         required: false
@@ -62,15 +54,12 @@ jobs:
       - name: Install runtime dependencies
         run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt
 
-      - name: Run HK full-market strategy
+      - name: Run HK full-market latest strategy
         env:
           PYTHONPATH: src
           NOTIFICATION_WEBHOOK: ${{ secrets.NOTIFICATION_WEBHOOK }}
         run: |
-          CONFIG_FILE="config.json"
-          if [[ "${{ inputs.config_file }}" =~ "two_day_drop" ]]; then
-            CONFIG_FILE="config.hk.two_day_drop.json"
-          fi
+          CONFIG_FILE="config.hk.two_day_drop.json"
           echo "Using config file: $CONFIG_FILE"
 
           args=(

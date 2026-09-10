@@ -81,9 +81,27 @@ def load_industry_returns(path: str | Path) -> pd.DataFrame:
     return frame.dropna(subset=["date", "daily_return_pct"])
 
 
+def _parse_hong_kong_datetime(value: object) -> pd.Timestamp:
+    """Parse a timestamp, treating a timezone-less value as Hong Kong time."""
+    if value is None or pd.isna(value):
+        return pd.NaT
+    try:
+        stamp = pd.Timestamp(value)
+    except (TypeError, ValueError, OverflowError):
+        return pd.NaT
+    if stamp.tzinfo is None:
+        stamp = stamp.tz_localize("Asia/Hong_Kong")
+    else:
+        stamp = stamp.tz_convert("Asia/Hong_Kong")
+    return stamp.tz_localize(None)
+
+
 def _parse_datetime_series(values: pd.Series) -> pd.Series:
-    parsed = pd.to_datetime(values, errors="coerce", utc=True)
-    return parsed.dt.tz_convert("Asia/Hong_Kong").dt.tz_localize(None)
+    return pd.Series(
+        [_parse_hong_kong_datetime(value) for value in values],
+        index=values.index,
+        name=values.name,
+    )
 
 
 def _asof_end(asof: object) -> pd.Timestamp:
@@ -230,17 +248,22 @@ def _compute_industry_benchmark(
         n = len(group)
         if n <= 1:
             continue
-        peer_count.loc[group.index] = n - 1
         returns = pd.to_numeric(group["daily_return_pct"], errors="coerce").to_numpy(dtype=float)
 
         if method == "mean":
-            total = np.nansum(returns)
-            benchmarks = (total - returns) / (n - 1)
+            benchmarks = np.full(n, np.nan, dtype=float)
+            for i in range(n):
+                peer_vals = np.delete(returns, i)
+                valid = peer_vals[np.isfinite(peer_vals)]
+                peer_count.loc[group.index[i]] = len(valid)
+                if len(valid) > 0:
+                    benchmarks[i] = np.mean(valid)
         elif method == "trimmed_mean":
             benchmarks = np.zeros(n, dtype=float)
             for i in range(n):
                 peer_vals = np.delete(returns, i)
                 valid = peer_vals[np.isfinite(peer_vals)]
+                peer_count.loc[group.index[i]] = len(valid)
                 if len(valid) >= 4:
                     low, high = np.percentile(valid, [10, 90])
                     trimmed = valid[(valid >= low) & (valid <= high)]
@@ -259,6 +282,7 @@ def _compute_industry_benchmark(
             for i in range(n):
                 peer_vals = np.delete(returns, i)
                 peer_to = np.delete(turnovers, i)
+                peer_count.loc[group.index[i]] = int(np.isfinite(peer_vals).sum())
                 mask = np.isfinite(peer_vals) & np.isfinite(peer_to) & (peer_to > 0)
                 if np.any(mask):
                     benchmarks[i] = np.average(peer_vals[mask], weights=peer_to[mask])
@@ -270,6 +294,7 @@ def _compute_industry_benchmark(
             for i in range(n):
                 peer_vals = np.delete(returns, i)
                 valid = peer_vals[np.isfinite(peer_vals)]
+                peer_count.loc[group.index[i]] = len(valid)
                 benchmarks[i] = np.median(valid) if len(valid) > 0 else np.nan
 
         industry_benchmark.loc[group.index] = benchmarks

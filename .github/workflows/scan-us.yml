@@ -9,14 +9,6 @@ on:
     - cron: "30 21 * * 1-5"
   workflow_dispatch:
     inputs:
-      config_file:
-        description: "选择美股筛选策略"
-        required: false
-        default: "config.us.json (经典超跌反弹)"
-        type: choice
-        options:
-          - "config.us.json (经典超跌反弹)"
-          - "config.us.two_day_drop.json (三日下跌+流动性)"
       refresh_metadata:
         description: Rebuild the US industry metadata cache before scanning
         required: false
@@ -27,7 +19,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: us-full-market-scan
+  group: stock-scanner-us
   cancel-in-progress: false
 
 env:
@@ -59,18 +51,23 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-us-market-cache-
 
+      - name: Restore yfinance history cache
+        uses: actions/cache/restore@v4
+        with:
+          path: data/yfinance_cache
+          key: yfinance-us-${{ github.run_id }}
+          restore-keys: |
+            yfinance-us-
+
       - name: Install runtime dependencies
         run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt
 
-      - name: Run the existing US full-market strategy
+      - name: Run US full-market latest strategy
         env:
           PYTHONPATH: src
           NOTIFICATION_WEBHOOK: ${{ secrets.NOTIFICATION_WEBHOOK }}
         run: |
-          CONFIG_FILE="config.us.json"
-          if [[ "${{ inputs.config_file }}" =~ "two_day_drop" ]]; then
-            CONFIG_FILE="config.us.two_day_drop.json"
-          fi
+          CONFIG_FILE="config.us.two_day_drop.json"
           echo "Using config file: $CONFIG_FILE"
           args=(
             --mode live
@@ -83,6 +80,13 @@ jobs:
             args+=(--refresh-metadata)
           fi
           python -m hk_rebound_screener.main "${args[@]}"
+
+      - name: Save yfinance history cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: data/yfinance_cache
+          key: yfinance-us-${{ github.run_id }}
 
       - name: Upload US scan CSV
         if: always()

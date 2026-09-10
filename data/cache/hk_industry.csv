@@ -481,7 +481,7 @@
 00626,Banks—Regional,PUBLIC FIN HOLD
 00627,Real Estate—Development,VISION SYNERGY
 00628,Credit Services,TONGTONG AI SOC
-00629,,YUE DA INTL
+00629,Specialty Business Services,YUE DA INTL
 00630,Medical Instruments & Supplies,AMCO UNITED
 00631,Farm & Heavy Construction Machinery,SANY INT'L
 00632,Oil & Gas Refining & Marketing,CHK OIL
@@ -903,7 +903,7 @@
 01213,,MOBICON GROUP
 01215,Lodging,KAI YUAN HLDGS
 01216,Banks—Regional,ZYBANK
-01218,,EASYKNIT INT'L
+01218,Real Estate—Development,EASYKNIT-NEW
 01220,,ZHIDAO INT'L
 01221,Lodging,SINO HOTELS
 01222,Conglomerates,WANG ON GROUP
@@ -1501,7 +1501,7 @@
 02033,Footwear & Accessories,TIME WATCH
 02038,Consumer Electronics,FIH
 02039,Metal Fabrication,CIMC
-02041,,MEDCAPTAIN
+02041,Medical Devices,MEDCAPTAIN
 02048,Real Estate Services,E-HOUSE ENT
 02050,Specialty Industrial Machinery,SANHUA
 02051,Credit Services,VALA
@@ -1777,7 +1777,7 @@
 02487,Biotechnology,CUTIA-B
 02488,Auto Parts,LAUNCH TECH
 02489,Gold,PERSISTENCEGOLD
-02490,Integrated Freight & Logistics,LC LOGISTICS
+02490,Integrated Freight & Logistics,LC HOLDING
 02493,Biotechnology,MABWELL-B
 02495,Software—Infrastructure,VOICECOMM
 02496,,YZYBIO-B
@@ -1974,14 +1974,15 @@
 02908,,BJ SPORTS&E-OLD
 02909,,IMAGI INT'L-8K
 02910,,ASIA STRAT-10K
-02912,,EASYKNIT INT'L
+02912,,EASYKNIT-OLD
 02913,,TIAN CHENG HLDG
 02914,,ALPHA PRO H-20K
 02918,,AI ENERGY E-10K
 02919,,GBA AI COMP-2K
+02921,,CAPITAL IND FIN
 03200,Specialty Industrial Machinery,HANS CNC
 03223,Semiconductors,INGENIC
-03231,,EXCELLAND ROBOT
+03231,Computer Hardware,EXCELLAND ROBOT
 03268,Communication Equipment,MEIG
 03277,Semiconductor Equipment & Materials,GPIXEL
 03288,Packaged Foods,HAITIAN FLAV
@@ -2599,7 +2600,7 @@
 08495,Restaurants,1957 & CO.
 08496,,GLOBAL UIN
 08500,,ICONCULTURE
-08501,,SANBASE CORP
+08501,Consulting Services,SANBASE CORP
 08502,Infrastructure Operations,OCEAN LINE PORT
 08507,Apparel Manufacturing,I.CENTURY HLDG
 08509,Beverages—Wineries & Distilleries,WINE'S LINK

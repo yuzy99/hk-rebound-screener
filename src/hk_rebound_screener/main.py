@@ -33,6 +33,19 @@ from .strategy import (
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def _validated_live_asof(spot: pd.DataFrame, prices: pd.DataFrame) -> object | None:
+    """Use a snapshot timestamp only when it is not older than daily coverage."""
+    if spot.empty:
+        return None
+    spot_date = pd.to_datetime(spot["date"], errors="coerce").dt.normalize().max()
+    price_date = pd.to_datetime(prices["date"], errors="coerce").dt.normalize().max()
+    if pd.isna(spot_date) or (pd.notna(price_date) and spot_date < price_date):
+        return None
+    if "timestamp" in spot:
+        return spot["timestamp"].max()
+    return spot_date
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="港股/美股反弹与相对行业滞涨筛选")
     parser.add_argument("--mode", choices=["sample", "backtest", "live"], default="sample")
@@ -113,7 +126,7 @@ def main() -> None:
             )
             news = pd.DataFrame(columns=["code", "published_at", "title", "body", "url"])
             if not spot.empty:
-                live_asof = spot["timestamp"].max() if "timestamp" in spot else spot["date"].max()
+                live_asof = _validated_live_asof(spot, prices)
                 print(f"批量行情快照: {spot['date'].max().date()}，代码数={len(spot)}")
         elif market == "HK":
             prices, spot = build_live_prices(
@@ -132,7 +145,7 @@ def main() -> None:
             except Exception as error:  # noqa: BLE001 - CSV metadata remains a safe fallback
                 print(f"WARN HKEX 手数主数据: {error}; 使用 universe.csv 中的缓存值")
             if not spot.empty:
-                live_asof = spot["timestamp"].max()
+                live_asof = _validated_live_asof(spot, prices)
                 print(f"AKShare 实时快照: {spot['date'].max().date()}，代码数={len(spot)}（接口为延时行情）")
         elif market == "US":
             prices, spot = build_us_live_prices(
@@ -142,7 +155,7 @@ def main() -> None:
             )
             news, news_status = fetch_yfinance_news(codes)
             if not spot.empty:
-                live_asof = spot["timestamp"].max()
+                live_asof = _validated_live_asof(spot, prices)
                 print(f"yfinance 美股快照: {spot['date'].max().date()}，代码数={len(spot)}（免费源可能延时/限流）")
 
     if prices.empty:

@@ -1,16 +1,8 @@
-# 港股 / 美股反弹与相对行业滞涨筛选示例
+# 港股 / 美股三日下跌与流动性筛选器
 
-这个示例保留港股策略，并新增美股策略。规则引擎使用 pandas，实现：
+本仓库当前以“三日下跌 + 流动性”策略作为港股和美股的唯一正式扫描策略。规则引擎使用 pandas，行业数据仅作参考，不参与该策略的通过条件和评分。
 
-1. 上一交易日跌幅 `<= -5%`；
-2. 当日同行平均涨幅 `>= +1%`，并且按剔除自身的 leave-one-out 平均计算；
-3. 个股当日涨幅 `<= 0%`，或落后同行平均 `>= 2` 个百分点；
-4. 近 48 小时命中重大利空关键词则排除；
-5. 只纳入普通股；港股为最新价 × 每手股数 `<= HK$30,000`，美股按 1 股交易单位计算并使用 `HK$30,000 ÷ USD/HKD` 等值上限；
-6. 以“昨日跌幅绝对值 + 相对行业滞涨 + 成交量异常 - 负面新闻分”排序；
-7. 用同一信号函数提供一个“下一交易日开盘买入、收盘卖出”的简化研究回测。
-
-## 新增：三日下跌 + 流动性策略
+## 当前策略规则
 
 该策略不设最低股价，但会单独过滤低流动性股票，且不把“无成交时显示 0%”当作平盘信号：
 
@@ -29,7 +21,7 @@ python -m hk_rebound_screener.main --mode live --full-market --config .\config.h
 
 输出会额外包含 `two_days_ago_return_pct`、`turnover`、`prior_turnover_median`、`prior_traded_days` 和 `liquidity_ok`，便于复核为什么某只股票被剔除。
 
-美股对应配置为 `config.us.two_day_drop.json`，使用美元成交额 `3,000,000` 作为流动性门槛，筛选窗口和跌幅条件相同。原有 `config.us.json` 保持不变，Actions 页面手动运行时可在策略选项中选择新的美股配置。
+美股对应配置为 `config.us.two_day_drop.json`，使用美元成交额 `3,000,000` 作为流动性门槛，筛选窗口和跌幅条件相同。GitHub Actions 的定时运行和手动运行均固定使用这两个最新配置；旧配置文件仅保留作本地兼容和历史参考，不再作为 GitHub 扫描入口。
 
 ## 先跑确定性示例
 
@@ -51,7 +43,7 @@ python -m pytest -q
 ```powershell
 cd D:\CodexWorkSpace\hk-rebound-screener
 .\.venv\Scripts\python.exe -m hk_rebound_screener.main --mode sample --config .\config.us.demo.json --universe .\universe.us.csv --prices .\data\sample\us_prices.csv --news .\data\sample\us_news.csv --asof 2026-09-02
-.\.venv\Scripts\python.exe -m hk_rebound_screener.main --mode live --config .\config.us.json --universe .\universe.us.csv --limit-codes 4
+.\.venv\Scripts\python.exe -m hk_rebound_screener.main --mode live --config .\config.us.two_day_drop.json --universe .\universe.us.csv --limit-codes 4
 ```
 
 美股 live 模式按代码抓取日线、最新可用分钟线和新闻；免费源可能延时、限流或缺少新闻，因此新闻抓取失败仍按严格模式阻断候选。美股没有港股 board lot，不能套用 HKEX 手数主数据。
@@ -62,8 +54,8 @@ cd D:\CodexWorkSpace\hk-rebound-screener
 
 ```powershell
 $env:PYTHONPATH = "$PWD\src"
-python -m hk_rebound_screener.main --mode live --full-market --config .\config.json
-python -m hk_rebound_screener.main --mode live --full-market --config .\config.us.json
+python -m hk_rebound_screener.main --mode live --full-market --config .\config.hk.two_day_drop.json
+python -m hk_rebound_screener.main --mode live --full-market --config .\config.us.two_day_drop.json
 ```
 
 首次运行需要建立行业缓存，可能较慢；以后手动运行会复用 `data/cache/hk_industry.csv` 或 `data/cache/us_industry.csv`。需要重建时再加 `--refresh-metadata`。该模式不会创建定时任务。
@@ -79,7 +71,7 @@ live 模式会调用 AKShare 的港股全市场延时快照，再按 `universe.c
 
 ## GitHub Actions 云端定时扫描
 
-仓库内的 `.github/workflows/scan-hk.yml` 和 `.github/workflows/scan-us.yml` 直接调用上面的 `--mode live --full-market` 入口，不会改写筛选规则或参数。两个 workflow 都支持 Actions 页面上的 **Run workflow** 手动触发，并可选重建行业元数据缓存。
+仓库内的 `.github/workflows/scan-hk.yml` 和 `.github/workflows/scan-us.yml` 直接调用上面的 `--mode live --full-market` 入口，并固定使用最新港股和美股配置，不再提供旧策略选择。两个 workflow 都支持 Actions 页面上的 **Run workflow** 手动触发，并可选重建行业元数据缓存。
 
 - 港股：工作日 `08:30 UTC`，即 `Asia/Taipei` `16:30`，用于港股收市后的全市场扫描。
 - 美股：工作日 `21:30 UTC`，即台北时间次日 `05:30`；这个时间在美国夏令时和冬令时都位于收市之后。GitHub Actions 的 cron 只接受 UTC，workflow 同时设置 `TZ=Asia/Taipei` 供运行日志和日期处理使用。
@@ -88,7 +80,7 @@ live 模式会调用 AKShare 的港股全市场延时快照，再按 `universe.c
 - **免下载直观简报**：工作流会自动将入选标的或无标的提示写入 GitHub Actions 运行详情页的 **Summary** 区块，无需下载解压 CSV。
 - **机器人消息推送（可选）**：在 GitHub 仓库的 **Settings -> Secrets and variables -> Actions** 中添加名为 `NOTIFICATION_WEBHOOK` 的 Secret（填入企业微信、飞书或钉钉机器人的 Webhook 地址），工作流执行完毕后会自动将简报推送到群聊。
 
-如果本地目录还没有 GitHub 远端，需要先将本目录初始化为 Git 仓库并推送到一个 GitHub repository；推送后在仓库的 **Actions** 页面启用 workflow。当前工作区未检测到 Git 远端，且本机 `gh` 登录令牌已失效，因此不会自动创建或推送到未知的 GitHub repository。
+本仓库的 GitHub 远端为 `https://github.com/yuzy99/hk-rebound-screener.git`；推送后可在仓库的 **Actions** 页面启用或查看 workflow。定时任务只会使用最新策略配置，扫描产生的结果仍按现有 workflow 规则保存为 Actions artifact。
 
 ## 必须维护的元数据
 

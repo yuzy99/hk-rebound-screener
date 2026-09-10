@@ -1,20 +1,26 @@
 from __future__ import annotations
 
 import io
+import random
 import time
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
-from .strategy import normalize_code
+from .strategy import _parse_datetime_series, _parse_hong_kong_datetime, normalize_code
 
 
 HKEX_SECURITIES_URL = (
     "https://www.hkex.com.hk/eng/services/trading/securities/"
     "securitieslists/ListOfSecurities.xlsx"
 )
+YFINANCE_BATCH_SIZE = 100
+YFINANCE_RETRY_DELAYS = (2.0, 5.0, 10.0)
+YFINANCE_CACHE_DIR = Path("data") / "yfinance_cache"
+AKSHARE_HISTORY_CACHE_FILE = Path("data") / "akshare_cache" / "hk_history.csv"
 
 
 def fetch_hkex_security_master(
@@ -245,33 +251,88 @@ def fetch_yfinance_history_bulk(
     start_date: date,
     end_date: date,
     auto_adjust: bool = True,
-    chunk_size: int = 200,
+    chunk_size: int = YFINANCE_BATCH_SIZE,
 ) -> pd.DataFrame:
     """Fetch many US/HK daily bars in chunks to reduce per-symbol requests."""
     import yfinance as yf
 
+    columns = ["date", "code", "open", "close", "volume"]
+    cache_columns = columns + ["auto_adjust", "adjustment_factor"]
+    empty = pd.DataFrame(columns=columns)
     rows: list[pd.DataFrame] = []
     code_map = {_yahoo_symbol(code, market): normalize_code(code) for code in codes}
     symbols = list(code_map)
-    for start in range(0, len(symbols), chunk_size):
-        batch = symbols[start : start + chunk_size]
+    requested_codes = set(code_map.values())
+    cached = pd.DataFrame(columns=cache_columns)
+    cache_file: Path | None = None
+
+    def parse_bool(value: object) -> bool | None:
+        text = str(value).strip().lower()
+        if text in {"1", "true", "yes", "y", "auto", "adjusted"}:
+            return True
+        if text in {"0", "false", "no", "n", "raw", "unadjusted"}:
+            return False
+        return None
+
+    if market.upper() in {"US", "HK"}:
+        cache_file = YFINANCE_CACHE_DIR / f"{market.lower()}_history.csv"
         try:
-            frame = yf.download(
-                tickers=batch,
-                start=start_date,
-                end=end_date + timedelta(days=1),
-                interval="1d",
-                auto_adjust=auto_adjust,
-                actions=False,
-                group_by="ticker",
-                threads=True,
-                progress=False,
+            cached = pd.read_csv(cache_file, dtype={"code": str})
+            required = set(cache_columns)
+            if not required.issubset(cached.columns):
+                raise ValueError(f"缺少字段: {sorted(required.difference(cached.columns))}")
+            cached = cached[cache_columns].copy()
+            cached["date"] = pd.to_datetime(cached["date"], errors="coerce").dt.normalize()
+            cached["code"] = cached["code"].map(normalize_code)
+            for column in ["open", "close", "volume"]:
+                cached[column] = pd.to_numeric(cached[column], errors="coerce")
+            cached["auto_adjust"] = cached["auto_adjust"].map(parse_bool)
+            cached["adjustment_factor"] = pd.to_numeric(cached["adjustment_factor"], errors="coerce")
+            cached = cached.dropna(
+                subset=["date", "code", "close", "volume", "auto_adjust", "adjustment_factor"]
             )
-        except Exception as error:  # noqa: BLE001 - keep other chunks usable
-            print(f"WARN bulk history {start + 1}-{start + len(batch)}: {error}")
+            if cached.empty:
+                raise ValueError("缓存没有有效行情")
+            cached = cached.drop_duplicates(["date", "code"], keep="last")
+            requested_mask = cached["code"].isin(requested_codes)
+            cached = cached.loc[
+                ~requested_mask | cached["auto_adjust"].eq(bool(auto_adjust))
+            ].copy()
+            print(
+                f"使用 yfinance 缓存: {cache_file}；已校验复权口径 auto_adjust={bool(auto_adjust)}",
+                flush=True,
+            )
+        except FileNotFoundError:
+            pass
+        except Exception as error:  # noqa: BLE001 - a bad cache falls back to a full download
+            cached = pd.DataFrame(columns=cache_columns)
+            print(f"WARN yfinance cache {cache_file}: {error}; fallback to full download", flush=True)
+
+    download_starts: dict[str, date] = {}
+    for code in requested_codes:
+        code_cache = cached.loc[cached["code"].eq(code)]
+        if code_cache.empty:
+            download_starts[code] = start_date
             continue
+        cache_min = code_cache["date"].min().date()
+        cache_max = code_cache["date"].max().date()
+        if cache_min > start_date:
+            download_starts[code] = start_date
+        elif cache_max < end_date:
+            download_starts[code] = max(start_date, cache_max - timedelta(days=6))
+        else:
+            download_starts[code] = max(start_date, end_date - timedelta(days=6))
+    if download_starts:
+        print(
+            f"yfinance 各股票请求窗口: {min(download_starts.values())} 至 {end_date}",
+            flush=True,
+        )
+
+    def extract_rows(frame: pd.DataFrame, batch: list[str]) -> tuple[list[pd.DataFrame], list[str]]:
+        extracted: list[pd.DataFrame] = []
+        missing: list[str] = []
         if frame.empty:
-            continue
+            return extracted, list(batch)
         for symbol in batch:
             try:
                 if isinstance(frame.columns, pd.MultiIndex):
@@ -282,6 +343,7 @@ def fetch_yfinance_history_bulk(
                 else:
                     subframe = frame
                 if "Close" not in subframe or "Volume" not in subframe:
+                    missing.append(symbol)
                     continue
                 subframe = subframe.copy()
                 subframe["date"] = _yfinance_local_date(subframe.index).values
@@ -289,13 +351,137 @@ def fetch_yfinance_history_bulk(
                 subframe["open"] = pd.to_numeric(subframe.get("Open"), errors="coerce")
                 subframe["close"] = pd.to_numeric(subframe["Close"], errors="coerce")
                 subframe["volume"] = pd.to_numeric(subframe["Volume"], errors="coerce")
-                rows.append(subframe[["date", "code", "open", "close", "volume"]])
+                if "Adj Close" in subframe:
+                    adjusted_close = pd.to_numeric(subframe["Adj Close"], errors="coerce")
+                    subframe["adjustment_factor"] = adjusted_close / subframe["close"]
+                else:
+                    subframe["adjustment_factor"] = 1.0
+                subframe["auto_adjust"] = bool(auto_adjust)
+                subframe = subframe[cache_columns].dropna(
+                    subset=["date", "code", "close", "volume"]
+                )
+                subframe["adjustment_factor"] = pd.to_numeric(
+                    subframe["adjustment_factor"], errors="coerce"
+                ).replace([np.inf, -np.inf], np.nan).fillna(1.0)
+                if subframe.empty:
+                    missing.append(symbol)
+                else:
+                    extracted.append(subframe)
             except Exception as error:  # noqa: BLE001 - one bad symbol must not abort a batch
-                print(f"WARN bulk symbol {symbol}: {error}")
-        print(f"批量历史行情: {min(start + len(batch), len(symbols))}/{len(symbols)}")
-    if not rows:
-        return pd.DataFrame(columns=["date", "code", "open", "close", "volume"])
-    return pd.concat(rows, ignore_index=True).dropna(subset=["date", "code", "close", "volume"])
+                print(f"WARN bulk symbol {symbol}: {error}", flush=True)
+                missing.append(symbol)
+        return extracted, missing
+
+    def download_batch(
+        batch: list[str],
+        starts: dict[str, date],
+    ) -> tuple[list[pd.DataFrame], list[str]]:
+        remaining = list(batch)
+        collected: list[pd.DataFrame] = []
+        batch_start = min(starts[code_map[symbol]] for symbol in batch)
+        for attempt in range(len(YFINANCE_RETRY_DELAYS) + 1):
+            try:
+                frame = yf.download(
+                    tickers=remaining,
+                    start=batch_start,
+                    end=end_date + timedelta(days=1),
+                    interval="1d",
+                    auto_adjust=auto_adjust,
+                    actions=False,
+                    group_by="ticker",
+                    threads=False,
+                    timeout=30,
+                    progress=False,
+                )
+                batch_rows, missing = extract_rows(frame, remaining)
+                collected.extend(batch_rows)
+                remaining = missing
+                if not remaining:
+                    return collected, []
+            except Exception as error:  # noqa: BLE001 - retry/split keeps other batches usable
+                print(
+                    f"WARN bulk history batch {len(remaining)} symbols, attempt {attempt + 1}: {error}",
+                    flush=True,
+                )
+            if attempt < len(YFINANCE_RETRY_DELAYS):
+                delay = YFINANCE_RETRY_DELAYS[attempt] * random.uniform(0.9, 1.1)
+                time.sleep(delay)
+        if len(remaining) > 1:
+            middle = len(remaining) // 2
+            print(f"WARN split yfinance batch: {len(remaining)} -> {middle}+{len(remaining) - middle}", flush=True)
+            left_rows, left_missing = download_batch(remaining[:middle], starts)
+            right_rows, right_missing = download_batch(remaining[middle:], starts)
+            return collected + left_rows + right_rows, left_missing + right_missing
+        return collected, remaining
+
+    def download_symbols(symbols_to_fetch: list[str], starts: dict[str, date]) -> list[str]:
+        failed: list[str] = []
+        grouped: dict[date, list[str]] = {}
+        for symbol in symbols_to_fetch:
+            grouped.setdefault(starts[code_map[symbol]], []).append(symbol)
+        completed = 0
+        for group_symbols in grouped.values():
+            for batch_start in range(0, len(group_symbols), chunk_size):
+                batch = group_symbols[batch_start : batch_start + chunk_size]
+                batch_rows, batch_failed = download_batch(batch, starts)
+                rows.extend(batch_rows)
+                failed.extend(batch_failed)
+                completed += len(batch)
+                print(f"批量历史行情: {completed}/{len(symbols_to_fetch)}")
+                if completed < len(symbols_to_fetch):
+                    time.sleep(random.uniform(0.5, 1.5))
+        return failed
+
+    failed_symbols = download_symbols(symbols, download_starts)
+    if failed_symbols:
+        print(f"WARN yfinance failed symbols ({len(failed_symbols)}): {','.join(failed_symbols)}", flush=True)
+
+    fresh = pd.concat(rows, ignore_index=True) if rows else pd.DataFrame(columns=cache_columns)
+    if market.upper() in {"US", "HK"}:
+        factor_changed: set[str] = set()
+        if not cached.empty and not fresh.empty:
+            cached_factors = cached.merge(
+                fresh[["date", "code", "adjustment_factor"]],
+                on=["date", "code"],
+                how="inner",
+                suffixes=("_cached", "_fresh"),
+            )
+            changed = ~np.isclose(
+                cached_factors["adjustment_factor_cached"],
+                cached_factors["adjustment_factor_fresh"],
+                rtol=1e-4,
+                atol=1e-6,
+                equal_nan=False,
+            )
+            factor_changed = set(cached_factors.loc[changed, "code"])
+        if factor_changed:
+            print(
+                f"WARN yfinance 复权因子变化，重新同步: {','.join(sorted(factor_changed))}",
+                flush=True,
+            )
+            cached = cached.loc[~cached["code"].isin(factor_changed)].copy()
+            fresh = fresh.loc[~fresh["code"].isin(factor_changed)].copy()
+            resync_starts = {code: start_date for code in factor_changed}
+            resync_symbols = [symbol for symbol, code in code_map.items() if code in factor_changed]
+            failed_symbols.extend(download_symbols(resync_symbols, resync_starts))
+            fresh = pd.concat(rows, ignore_index=True) if rows else pd.DataFrame(columns=cache_columns)
+        combined = pd.concat([cached, fresh], ignore_index=True)
+        if not combined.empty:
+            combined = combined.drop_duplicates(["date", "code"], keep="last").sort_values(["code", "date"])
+            try:
+                assert cache_file is not None
+                cache_file.parent.mkdir(parents=True, exist_ok=True)
+                combined.to_csv(cache_file, index=False, encoding="utf-8-sig")
+            except Exception as error:  # noqa: BLE001 - cache write failure must not stop a scan
+                print(f"WARN yfinance cache write {cache_file}: {error}", flush=True)
+        fresh = combined[columns]
+    if fresh.empty:
+        return empty
+    return fresh.loc[
+        fresh["code"].isin(requested_codes)
+        & fresh["date"].ge(pd.Timestamp(start_date))
+        & fresh["date"].le(pd.Timestamp(end_date))
+    ].sort_values(["code", "date"]).reset_index(drop=True)
 
 
 def build_full_market_prices(
@@ -310,11 +496,7 @@ def build_full_market_prices(
     if market.upper() == "HK":
         spot = fetch_akshare_spot()
         spot = spot.loc[spot["code"].isin({normalize_code(code) for code in codes})].copy()
-        live_rows = spot[["date", "code", "close", "volume"]].copy()
-        if "turnover_hkd" in spot:
-            live_rows["turnover"] = pd.to_numeric(spot["turnover_hkd"], errors="coerce")
-        prices = pd.concat([history, live_rows], ignore_index=True)
-        prices = prices.drop_duplicates(["date", "code"], keep="last")
+        prices = _merge_hk_history_and_spot(history, spot)
     else:
         latest = history.sort_values(["code", "date"]).drop_duplicates("code", keep="last")
         spot = latest[["date", "code", "close", "volume"]].copy()
@@ -325,6 +507,65 @@ def build_full_market_prices(
         spot["name"] = spot["code"]
         prices = history
     return prices.sort_values(["code", "date"]).reset_index(drop=True), spot.reset_index(drop=True)
+
+
+def _merge_hk_history_and_spot(history: pd.DataFrame, spot: pd.DataFrame) -> pd.DataFrame:
+    """Merge HK daily bars without letting a stale snapshot replace a complete bar."""
+    if history.empty:
+        return spot[["date", "code", "close", "volume"]].copy()
+    if spot.empty:
+        return history.copy()
+
+    daily = history.copy()
+    daily["date"] = daily["date"].map(_parse_hong_kong_datetime).dt.normalize()
+    daily["code"] = daily["code"].map(normalize_code)
+    daily = daily.dropna(subset=["date", "code", "close", "volume"])
+
+    snapshots = spot.copy()
+    snapshots["timestamp"] = snapshots["timestamp"].map(_parse_hong_kong_datetime)
+    snapshots["date"] = snapshots["timestamp"].dt.normalize()
+    snapshots["code"] = snapshots["code"].map(normalize_code)
+    snapshots["close"] = pd.to_numeric(snapshots["close"], errors="coerce")
+    snapshots["volume"] = pd.to_numeric(snapshots["volume"], errors="coerce")
+    snapshots = snapshots.dropna(subset=["timestamp", "date", "code", "close", "volume"])
+    if snapshots.empty:
+        return daily
+    snapshots = snapshots.sort_values(["code", "date", "timestamp"]).drop_duplicates(
+        ["code", "date"], keep="last"
+    )
+
+    latest_daily = daily.groupby("code")["date"].max().to_dict()
+    current_hk_date = pd.Timestamp.now(tz="Asia/Hong_Kong").date()
+    accepted: list[pd.Series] = []
+    for _, snapshot in snapshots.iterrows():
+        code = snapshot["code"]
+        snapshot_date = snapshot["date"]
+        daily_date = latest_daily.get(code)
+        if daily_date is not None and snapshot_date < daily_date:
+            continue
+        if daily_date is not None and snapshot_date == daily_date:
+            same_day = daily.loc[(daily["code"] == code) & (daily["date"] == snapshot_date)]
+            complete = not same_day.empty and same_day[["close", "volume"]].notna().all(axis=None)
+            if complete and snapshot_date.date() != current_hk_date:
+                continue
+            if complete and "timestamp" in same_day:
+                daily_timestamp = same_day["timestamp"].map(_parse_hong_kong_datetime).max()
+                if pd.notna(daily_timestamp) and snapshot["timestamp"] <= daily_timestamp:
+                    continue
+        accepted.append(snapshot)
+
+    if not accepted:
+        return daily
+    accepted_frame = pd.DataFrame(accepted)
+    live_rows = accepted_frame[["date", "code", "close", "volume"]]
+    turnover_column = "turnover_hkd" if "turnover_hkd" in accepted_frame else "turnover"
+    if turnover_column in accepted_frame:
+        live_rows["turnover"] = pd.to_numeric(
+            accepted_frame[turnover_column], errors="coerce"
+        ).to_numpy()
+    return pd.concat([daily, live_rows], ignore_index=True).drop_duplicates(
+        ["date", "code"], keep="last"
+    )
 
 
 def fetch_akshare_spot() -> pd.DataFrame:
@@ -346,7 +587,7 @@ def fetch_akshare_spot() -> pd.DataFrame:
     if missing:
         raise ValueError(f"AKShare 港股实时接口缺少字段: {sorted(missing)}")
     frame["code"] = frame["code"].map(normalize_code)
-    frame["timestamp"] = pd.to_datetime(frame["timestamp"], errors="coerce")
+    frame["timestamp"] = frame["timestamp"].map(_parse_hong_kong_datetime)
     for column in ("close", "prev_close", "volume", "turnover_hkd"):
         if column in frame:
             frame[column] = pd.to_numeric(frame[column], errors="coerce")
@@ -363,21 +604,84 @@ def fetch_akshare_history(
 ) -> pd.DataFrame:
     import akshare as ak
 
+    columns = ["date", "code", "close", "volume"]
+    cache_columns = columns + ["adjust"]
+    adjust_key = str(adjust or "").strip()
+    cached = pd.DataFrame(columns=cache_columns)
+    try:
+        cached = pd.read_csv(AKSHARE_HISTORY_CACHE_FILE, dtype={"code": str})
+        required = set(cache_columns)
+        if not required.issubset(cached.columns):
+            raise ValueError(f"缺少字段: {sorted(required.difference(cached.columns))}")
+        cached = cached[cache_columns].copy()
+        cached["date"] = cached["date"].map(_parse_hong_kong_datetime).dt.normalize()
+        cached["code"] = cached["code"].map(normalize_code)
+        for column in ("close", "volume"):
+            cached[column] = pd.to_numeric(cached[column], errors="coerce")
+        cached["adjust"] = cached["adjust"].fillna("").astype(str).str.strip()
+        cached = cached.loc[cached["adjust"].eq(adjust_key)].dropna(
+            subset=["date", "code", "close", "volume"]
+        )
+    except FileNotFoundError:
+        pass
+    except Exception as error:  # noqa: BLE001 - invalid cache falls back to AKShare
+        cached = pd.DataFrame(columns=cache_columns)
+        print(f"WARN AKShare history cache {AKSHARE_HISTORY_CACHE_FILE}: {error}; fallback to full download")
+
+    requested_codes = [normalize_code(code) for code in codes]
+    download_starts: dict[str, date] = {}
+    for code in requested_codes:
+        code_cache = cached.loc[cached["code"].eq(code)]
+        if code_cache.empty:
+            download_starts[code] = start_date
+            continue
+        cache_min = code_cache["date"].min().date()
+        cache_max = code_cache["date"].max().date()
+        if cache_min > start_date:
+            download_starts[code] = start_date
+        elif cache_max < end_date:
+            download_starts[code] = max(start_date, cache_max - timedelta(days=6))
+
     rows: list[pd.DataFrame] = []
-    for code in codes:
+    for code in requested_codes:
+        code_start = download_starts.get(code)
+        if code_start is None:
+            continue
         try:
             frame = ak.stock_hk_daily(
-                symbol=normalize_code(code),
+                symbol=code,
                 adjust=adjust,
             ).rename(columns={"date": "date", "close": "close", "volume": "volume"})
-            frame["date"] = pd.to_datetime(frame["date"], errors="coerce").dt.normalize()
-            frame = frame.loc[(frame["date"].dt.date >= start_date) & (frame["date"].dt.date <= end_date)]
-            frame["code"] = normalize_code(code)
-            rows.append(frame[["date", "code", "close", "volume"]])
+            frame["date"] = frame["date"].map(_parse_hong_kong_datetime).dt.normalize()
+            frame["close"] = pd.to_numeric(frame["close"], errors="coerce")
+            frame["volume"] = pd.to_numeric(frame["volume"], errors="coerce")
+            frame = frame.loc[
+                (frame["date"].dt.date >= code_start) & (frame["date"].dt.date <= end_date)
+            ].copy()
+            frame["code"] = code
+            frame["adjust"] = adjust_key
+            rows.append(frame[cache_columns].dropna(subset=["date", "code", "close", "volume"]))
         except Exception as error:  # noqa: BLE001 - one bad symbol must not abort a batch
             print(f"WARN history {code}: {error}")
         time.sleep(pause_seconds)
-    return pd.concat(rows, ignore_index=True) if rows else pd.DataFrame(columns=["date", "code", "close", "volume"])
+    fresh = pd.concat(rows, ignore_index=True) if rows else pd.DataFrame(columns=cache_columns)
+    combined = pd.concat([cached, fresh], ignore_index=True)
+    if not combined.empty:
+        combined = combined.drop_duplicates(["date", "code", "adjust"], keep="last").sort_values(
+            ["code", "date"]
+        )
+        try:
+            AKSHARE_HISTORY_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+            combined.to_csv(AKSHARE_HISTORY_CACHE_FILE, index=False, encoding="utf-8-sig")
+        except Exception as error:  # noqa: BLE001 - cache write failure must not stop a scan
+            print(f"WARN AKShare history cache write {AKSHARE_HISTORY_CACHE_FILE}: {error}")
+    return combined.loc[
+        combined["code"].isin(set(requested_codes))
+        & combined["adjust"].eq(adjust_key)
+        & combined["date"].ge(pd.Timestamp(start_date))
+        & combined["date"].le(pd.Timestamp(end_date)),
+        columns,
+    ].reset_index(drop=True)
 
 
 def fetch_akshare_news(codes: list[str]) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -398,8 +702,7 @@ def fetch_akshare_news(codes: list[str]) -> tuple[pd.DataFrame, pd.DataFrame]:
                 }
             )
             frame["code"] = normalize_code(code)
-            frame["published_at"] = pd.to_datetime(frame["published_at"], errors="coerce", utc=True)
-            frame["published_at"] = frame["published_at"].dt.tz_convert("Asia/Hong_Kong").dt.tz_localize(None)
+            frame["published_at"] = _parse_datetime_series(frame["published_at"])
             frame["title"] = frame["title"].fillna("").astype(str)
             frame["body"] = frame["body"].fillna("").astype(str)
             news_rows.append(frame[["code", "published_at", "title", "body", "url"]])
@@ -424,13 +727,11 @@ def build_live_prices(
     history = fetch_akshare_history(codes, start, today, adjust=adjust, pause_seconds=pause_seconds)
     spot = fetch_akshare_spot()
     spot = spot.loc[spot["code"].isin({normalize_code(code) for code in codes})].copy()
-    live_cols = ["date", "code", "close", "volume"]
     if "turnover_hkd" in spot:
         spot["turnover"] = pd.to_numeric(spot["turnover_hkd"], errors="coerce")
-        live_cols.append("turnover")
-    live_rows = spot[live_cols].copy()
-    prices = pd.concat([history, live_rows], ignore_index=True)
-    prices = prices.drop_duplicates(["date", "code"], keep="last").sort_values(["code", "date"])
+    prices = _merge_hk_history_and_spot(history, spot)
+    if "turnover" in prices:
+        prices["turnover"] = pd.to_numeric(prices["turnover"], errors="coerce")
     return prices.reset_index(drop=True), spot
 
 
@@ -442,13 +743,12 @@ def _yfinance_local_date(index: pd.Index) -> pd.Series:
 
 
 def _yfinance_news_datetime(value: object) -> pd.Timestamp:
-    if isinstance(value, (int, float)):
+    if isinstance(value, (int, float, np.integer, np.floating)) and not isinstance(value, bool):
         stamp = pd.to_datetime(value, unit="s", errors="coerce", utc=True)
-    else:
-        stamp = pd.to_datetime(value, errors="coerce", utc=True)
-    if pd.isna(stamp):
-        return pd.NaT
-    return stamp.tz_convert("Asia/Hong_Kong").tz_localize(None)
+        if pd.isna(stamp):
+            return pd.NaT
+        return stamp.tz_convert("Asia/Hong_Kong").tz_localize(None)
+    return _parse_hong_kong_datetime(value)
 
 
 def fetch_yfinance_history(
@@ -504,19 +804,32 @@ def fetch_yfinance_spot(
         try:
             ticker = yf.Ticker(symbol)
             frame = ticker.history(period="1d", interval="1m", auto_adjust=auto_adjust, prepost=False)
+            intraday = not frame.empty
             if frame.empty:
                 frame = ticker.history(period="5d", interval="1d", auto_adjust=auto_adjust, actions=False)
             if frame.empty:
                 continue
-            row = frame.dropna(subset=["Close", "Volume"]).iloc[-1]
-            timestamp = pd.Timestamp(frame.dropna(subset=["Close", "Volume"]).index[-1])
+            valid = frame.dropna(subset=["Close", "Volume"]).copy()
+            if valid.empty:
+                continue
+            if intraday:
+                local_dates = _yfinance_local_date(valid.index)
+                latest_date = local_dates.max()
+                session = valid.loc[local_dates.to_numpy() == latest_date]
+                row = session.iloc[-1]
+                timestamp = pd.Timestamp(session.index[-1])
+                volume = pd.to_numeric(session["Volume"], errors="coerce").sum(min_count=1)
+            else:
+                row = valid.iloc[-1]
+                timestamp = pd.Timestamp(valid.index[-1])
+                volume = pd.to_numeric(pd.Series([row["Volume"]]), errors="coerce").iloc[0]
             rows.append({
                 "timestamp": timestamp,
                 "date": _yfinance_local_date([timestamp]).iloc[0],
                 "code": symbol,
                 "name": symbol,
                 "close": float(row["Close"]),
-                "volume": float(row["Volume"]),
+                "volume": float(volume),
             })
         except Exception as error:  # noqa: BLE001 - status is represented by returned rows
             print(f"WARN US spot {symbol}: {error}")
