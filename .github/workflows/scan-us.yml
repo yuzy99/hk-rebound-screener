@@ -9,6 +9,14 @@ on:
     - cron: "30 21 * * 1-5"
   workflow_dispatch:
     inputs:
+      config_file:
+        description: "选择美股筛选策略"
+        required: false
+        default: "config.us.json (经典超跌反弹)"
+        type: choice
+        options:
+          - "config.us.json (经典超跌反弹)"
+          - "config.us.two_day_drop.json (三日下跌+流动性)"
       refresh_metadata:
         description: Rebuild the US industry metadata cache before scanning
         required: false
@@ -59,10 +67,15 @@ jobs:
           PYTHONPATH: src
           NOTIFICATION_WEBHOOK: ${{ secrets.NOTIFICATION_WEBHOOK }}
         run: |
+          CONFIG_FILE="config.us.json"
+          if [[ "${{ inputs.config_file }}" =~ "two_day_drop" ]]; then
+            CONFIG_FILE="config.us.two_day_drop.json"
+          fi
+          echo "Using config file: $CONFIG_FILE"
           args=(
             --mode live
             --full-market
-            --config config.us.json
+            --config "$CONFIG_FILE"
             --metadata-cache data/cache/us_industry.csv
             --output-dir outputs
           )

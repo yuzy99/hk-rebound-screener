@@ -1,11 +1,13 @@
 {
-  "market": "HK",
+  "market": "US",
+  "currency": "USD",
   "strategy_mode": "two_day_drop",
-  "price_adjust": "",
+  "auto_adjust": true,
   "history_days": 120,
   "volume_lookback": 20,
   "news_lookback_hours": 48,
   "max_lot_value_hkd": 30000,
+  "usd_hkd_rate": null,
   "large_drop_max_pct": -5.0,
   "other_day_return_max_pct": 0.5,
   "negative_news_threshold": 5.0,
@@ -25,31 +27,31 @@
   "news_rules": {
     "profit_warning": {
       "weight": 5.0,
-      "terms": ["盈利预警", "盈警", "预亏", "盈警公告", "利润预警", "profit warning", "profit alert"]
+      "terms": ["profit warning", "profit alert", "lower earnings", "earnings guidance"]
     },
     "placement_rights_issue": {
       "weight": 5.0,
-      "terms": ["配股", "供股", "配售", "rights issue", "placing", "placement"]
+      "terms": ["rights offering", "rights issue", "secondary offering", "private placement", "stock offering"]
     },
     "shareholder_sell_down": {
       "weight": 5.0,
-      "terms": ["减持", "出售股份", "股东出售", "sell-down", "sell down"]
+      "terms": ["insider selling", "shareholder sell-down", "shareholder sells", "stake sale", "registered offering"]
     },
     "regulatory_penalty": {
       "weight": 5.0,
-      "terms": ["监管处罚", "纪律处分", "被罚", "监管调查", "regulatory penalty", "regulatory investigation"]
+      "terms": ["regulatory penalty", "regulatory investigation", "sec investigation", "doj investigation", "fined by"]
     },
     "suspension_resumption": {
       "weight": 5.0,
-      "terms": ["停牌", "复牌", "suspension", "resumption"]
+      "terms": ["trading halt", "trading suspension", "resumption of trading", "delisting notice"]
     },
     "major_litigation": {
       "weight": 5.0,
-      "terms": ["重大诉讼", "重大仲裁", "诉讼金额", "major litigation", "major lawsuit"]
+      "terms": ["major litigation", "class action", "securities lawsuit", "material lawsuit"]
     },
     "major_customer_loss": {
       "weight": 5.0,
-      "terms": ["重大客户流失", "失去主要客户", "客户流失", "loss of major customer", "customer loss"]
+      "terms": ["loss of major customer", "lost a major customer", "customer loss", "customer termination"]
     }
   }
 }

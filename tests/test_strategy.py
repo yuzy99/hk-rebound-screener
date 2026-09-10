@@ -60,7 +60,7 @@ def test_us_sample_signal_and_news_gate() -> None:
     assert "AAPL" in set(trades["code"])
 
 
-def test_two_day_drop_strategy_requires_consecutive_down_days_and_liquidity() -> None:
+def test_two_day_drop_strategy_requires_three_day_pattern_and_liquidity() -> None:
     config = load_config(ROOT / "config.hk.two_day_drop.json")
     dates = pd.bdate_range(end="2026-09-02", periods=24)
     rows = []
@@ -94,6 +94,46 @@ def test_two_day_drop_strategy_requires_consecutive_down_days_and_liquidity() ->
     assert bool(target["passes"])
     assert not bool(illiquid["liquidity_ok"])
     assert not bool(illiquid["passes"])
+
+
+def test_two_day_drop_strategy_uses_three_trading_day_window() -> None:
+    config = load_config(ROOT / "config.hk.two_day_drop.json")
+    dates = pd.bdate_range(end="2026-09-02", periods=24)
+    specs = [
+        ("00001", [100.0] * 21 + [94.0, 94.376, 94.752], 60000.0),
+        ("00002", [100.0] * 21 + [94.0, 94.564, 94.942], 60000.0),
+        ("00003", [100.0] * 21 + [96.0, 96.384, 96.769], 60000.0),
+    ]
+    rows = [
+        {"date": date, "code": code, "close": close, "volume": volume}
+        for code, closes, volume in specs
+        for date, close in zip(dates, closes)
+    ]
+    prices = pd.DataFrame(rows)
+    universe = pd.DataFrame(
+        {
+            "code": ["00001", "00002", "00003"],
+            "name": ["DropThenSmallUp", "DropThenTooMuchUp", "NoFivePctDrop"],
+            "industry": ["Tech", "Tech", "Tech"],
+            "lot_size": [100.0, 100.0, 100.0],
+            "enabled": [True, True, True],
+        }
+    )
+    news = pd.DataFrame(columns=["code", "published_at", "title", "body", "url"])
+
+    result = evaluate_signal(prices, universe, news, config, asof="2026-09-02")
+    target = result.loc[result["code"] == "00001"].iloc[0]
+    too_much_up = result.loc[result["code"] == "00002"].iloc[0]
+    no_drop = result.loc[result["code"] == "00003"].iloc[0]
+
+    assert bool(target["large_drop_ok"])
+    assert bool(target["other_days_ok"])
+    assert bool(target["three_day_drop_ok"])
+    assert bool(target["passes"])
+    assert not bool(too_much_up["other_days_ok"])
+    assert not bool(too_much_up["passes"])
+    assert not bool(no_drop["large_drop_ok"])
+    assert not bool(no_drop["passes"])
 
 
 def test_two_day_drop_strategy_does_not_require_industry_filters() -> None:
@@ -238,7 +278,7 @@ def test_two_day_drop_any_day_logic() -> None:
     assert bool(p3["passes"])
 
 
-def test_industry_lag_rebound_uses_sample_peer_average() -> None:
+def test_industry_lag_rebound_falls_back_to_today_rule_without_official_data() -> None:
     config = load_config(ROOT / "config.hk.industry_lag_rebound.json")
     universe = load_universe(ROOT / "universe.csv")
     prices = load_prices(ROOT / "data" / "sample" / "prices.csv")
@@ -247,29 +287,67 @@ def test_industry_lag_rebound_uses_sample_peer_average() -> None:
     result = evaluate_signal(prices, universe, news, config, asof="2026-09-02")
 
     tencent = result.loc[result["code"] == "00700"].iloc[0]
-    assert tencent["industry_return_source"] == "peer_equal_weight"
-    assert tencent["industry_return_pct"] == pytest.approx(1.5)
+    assert tencent["industry_return_source"] == "unavailable"
+    assert pd.isna(tencent["industry_return_pct"])
     assert tencent["yesterday_return_pct"] == pytest.approx(-6.0)
     assert tencent["day_before_yesterday_return_pct"] == pytest.approx(0.990099, abs=1e-6)
     assert tencent["today_return_pct"] == pytest.approx(-0.500625, abs=1e-6)
-    assert tencent["lag_vs_industry_pct"] == pytest.approx(2.000625, abs=1e-6)
+    assert pd.isna(tencent["lag_vs_industry_pct"])
     assert tencent["signal_day_volume"] == pytest.approx(4000000.0)
     assert bool(tencent["signal_volume_ok"])
     assert not bool(tencent["prior_drop_ok"])
     assert not bool(tencent["passes"])
     meituan = result.loc[result["code"] == "03690"].iloc[0]
+    assert not bool(meituan["industry_data_ok"])
+    assert not bool(meituan["industry_relationship_checked"])
+    assert bool(meituan["today_not_up_ok"])
     assert bool(meituan["prior_drop_ok"])
     assert bool(meituan["passes"])
+    alibaba = result.loc[result["code"] == "09988"].iloc[0]
+    assert not bool(alibaba["today_not_up_ok"])
+    assert not bool(alibaba["passes"])
 
     from hk_rebound_screener.notifier import format_markdown_report
 
     report = format_markdown_report(result, market="HK", asof="2026-09-02", config=config)
     assert "行业涨幅" in report
-    assert "股票池同行业等权平均" in report
+    assert "无行业数据，不判断行业关系" in report
     assert "落后行业" in report
     assert "前天(T-2)涨跌" in report
     assert "仅生成筛选结果，不下单" in report
     assert "48 小时舆情" not in report
+
+
+def test_industry_lag_rebound_uses_official_index_when_available() -> None:
+    config = load_config(ROOT / "config.hk.industry_lag_rebound.json")
+    universe = load_universe(ROOT / "universe.csv")
+    universe["official_industry"] = "Information Technology"
+    prices = load_prices(ROOT / "data" / "sample" / "prices.csv")
+    news = load_news(ROOT / "data" / "sample" / "news.csv")
+    industry_returns = pd.DataFrame({
+        "date": [pd.Timestamp("2026-09-02")],
+        "official_industry": ["Information Technology"],
+        "index_code": ["HSCIIT"],
+        "daily_return_pct": [0.5],
+        "source": ["hang_seng_composite_industry_index"],
+    })
+
+    result = evaluate_signal(
+        prices,
+        universe,
+        news,
+        config,
+        asof="2026-09-02",
+        industry_returns=industry_returns,
+    )
+
+    meituan = result.loc[result["code"] == "03690"].iloc[0]
+    assert bool(meituan["industry_data_ok"])
+    assert bool(meituan["industry_relationship_checked"])
+    assert meituan["industry_index_code"] == "HSCIIT"
+    assert meituan["industry_return_pct"] == pytest.approx(0.5)
+    assert meituan["industry_return_source"] == "hang_seng_composite_industry_index"
+    assert bool(meituan["passes"])
 
 
 def test_forward_observations_are_appended_after_screening() -> None:
@@ -305,7 +383,7 @@ def test_industry_lag_rebound_uses_only_requested_conditions() -> None:
         ("00001", "YesterdayDrop", "A", [100.0, 100.0, 95.0, 95.0]),
         ("00002", "PeerA1", "A", [100.0, 100.0, 100.0, 102.0]),
         ("00003", "PeerA2", "A", [100.0, 100.0, 100.0, 101.0]),
-        ("00004", "EarlierDrop", "B", [100.0, 94.0, 93.0, 93.5]),
+        ("00004", "EarlierDrop", "B", [100.0, 94.0, 93.0, 92.5]),
         ("00005", "PeerB", "B", [100.0, 100.0, 100.0, 103.0]),
         ("00006", "PriorTooSmall", "C", [100.0, 100.0, 95.1, 94.0]),
         ("00007", "IndustryCold", "D", [100.0, 100.0, 94.0, 93.0]),
@@ -335,17 +413,18 @@ def test_industry_lag_rebound_uses_only_requested_conditions() -> None:
     low_volume.loc[
         (low_volume["code"] == "00001") & (low_volume["date"] == low_volume["date"].max()),
         "volume",
-    ] = 500000.0
+    ] = 30000.0
     low_volume_result = evaluate_signal(low_volume, universe, news, config, asof="2026-09-02")
     low_volume_row = low_volume_result.loc[low_volume_result["code"] == "00001"].iloc[0]
     assert not bool(low_volume_row["signal_volume_ok"])
     assert not bool(low_volume_row["passes"])
     assert bool(result.loc[result["code"] == "00004", "passes"].iloc[0])
     assert not bool(result.loc[result["code"] == "00006", "passes"].iloc[0])
-    assert not bool(result.loc[result["code"] == "00007", "passes"].iloc[0])
+    assert bool(result.loc[result["code"] == "00007", "passes"].iloc[0])
     missing = result.loc[result["code"] == "00009"].iloc[0]
     assert not bool(missing["industry_data_ok"])
-    assert not bool(missing["passes"])
+    assert bool(missing["today_not_up_ok"])
+    assert bool(missing["passes"])
 
 
 def test_industry_mean_and_lag_or_positive_rule() -> None:
@@ -457,4 +536,3 @@ def test_industry_benchmark_methods_and_outlier_resilience() -> None:
     # 4. turnover_weighted 模式：资金加权后妖股影响微乎其微
     weighted_bench, _ = _compute_industry_benchmark(data, method="turnover_weighted")
     assert weighted_bench.iloc[0] < 1.0
-

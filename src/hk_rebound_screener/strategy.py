@@ -67,6 +67,20 @@ def load_news(path: str | Path) -> pd.DataFrame:
     return frame
 
 
+def load_industry_returns(path: str | Path) -> pd.DataFrame:
+    frame = pd.read_csv(path)
+    required = {"date", "official_industry", "index_code", "daily_return_pct"}
+    missing = required.difference(frame.columns)
+    if missing:
+        raise ValueError(f"行业指数文件缺少字段: {sorted(missing)}")
+    frame["date"] = pd.to_datetime(frame["date"], errors="coerce").dt.normalize()
+    frame["official_industry"] = frame["official_industry"].fillna("").astype(str).str.strip()
+    frame["daily_return_pct"] = pd.to_numeric(frame["daily_return_pct"], errors="coerce")
+    if "source" not in frame:
+        frame["source"] = "official_industry_index"
+    return frame.dropna(subset=["date", "daily_return_pct"])
+
+
 def _parse_datetime_series(values: pd.Series) -> pd.Series:
     parsed = pd.to_datetime(values, errors="coerce", utc=True)
     return parsed.dt.tz_convert("Asia/Hong_Kong").dt.tz_localize(None)
@@ -270,6 +284,7 @@ def evaluate_signal(
     config: dict[str, Any],
     asof: object | None = None,
     news_status: pd.DataFrame | None = None,
+    industry_returns: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     prepared = _prepare_prices(prices, config)
     available_dates = sorted(prepared["date"].dropna().unique())
@@ -299,24 +314,38 @@ def evaluate_signal(
     if result.empty:
         return result
 
-    default_method = "mean" if strategy_mode == "industry_lag_rebound" else "median"
-    industry_method = str(config.get("industry_avg_method", default_method)).lower()
-    result["industry_avg_return_pct"], result["peer_count"] = _compute_industry_benchmark(
-        result, method=industry_method
-    )
+    industry_method = str(config.get("industry_avg_method", "median")).lower()
+    if strategy_mode == "industry_lag_rebound":
+        result["industry_avg_return_pct"] = np.nan
+        result["peer_count"] = 0
+    else:
+        result["industry_avg_return_pct"], result["peer_count"] = _compute_industry_benchmark(
+            result, method=industry_method
+        )
     result["lag_vs_industry_pct"] = result["industry_avg_return_pct"] - result["daily_return_pct"]
 
     if strategy_mode == "industry_lag_rebound":
-        industry_known = result["industry"].notna() & result["industry"].astype(str).str.strip().ne("")
-        result["industry_return_pct"] = result["industry_avg_return_pct"].where(
-            industry_known & result["peer_count"].ge(1)
-        )
+        result["official_industry"] = result.get("official_industry", pd.Series("", index=result.index))
+        result["official_industry"] = result["official_industry"].fillna("").astype(str).str.strip()
+        official_today = pd.DataFrame(columns=[
+            "official_industry", "industry_index_code", "industry_return_pct", "industry_return_source",
+        ])
+        if industry_returns is not None and not industry_returns.empty:
+            official_today = industry_returns.loc[
+                industry_returns["date"].eq(pd.Timestamp(today_date)),
+                ["official_industry", "index_code", "daily_return_pct", "source"],
+            ].rename(columns={
+                "index_code": "industry_index_code",
+                "daily_return_pct": "industry_return_pct",
+                "source": "industry_return_source",
+            }).drop_duplicates("official_industry")
+        result = result.merge(official_today, on="official_industry", how="left")
         result["industry_avg_return_pct"] = result["industry_return_pct"]
         result["lag_vs_industry_pct"] = result["industry_return_pct"] - result["daily_return_pct"]
         result["yesterday_return_pct"] = result["prior_return_pct"]
         result["day_before_yesterday_return_pct"] = result["two_days_ago_return_pct"]
         result["today_return_pct"] = result["daily_return_pct"]
-        result["industry_return_source"] = "peer_equal_weight"
+        result["industry_return_source"] = result["industry_return_source"].fillna("unavailable")
         large_drop_max_pct = float(config["large_drop_max_pct"])
         other_day_max_pct = float(config["other_prior_day_return_max_pct"])
         result["prior_drop_ok"] = (
@@ -333,26 +362,27 @@ def evaluate_signal(
             float(config.get("min_signal_day_volume_shares", 500000))
         )
         result["industry_data_ok"] = (
-            industry_known
-            & result["peer_count"].ge(1)
+            result["official_industry"].ne("")
             & result["yesterday_return_pct"].notna()
             & result["day_before_yesterday_return_pct"].notna()
             & result["today_return_pct"].notna()
             & result["industry_return_pct"].notna()
         )
+        result["industry_relationship_checked"] = result["industry_data_ok"]
+        industry_rule_ok = result["industry_rebound_ok"] & (result["today_not_up_ok"] | result["lag_ok"])
         result["passes"] = (
-            result["industry_data_ok"]
-            & result["prior_drop_ok"]
-            & result["industry_rebound_ok"]
-            & (result["today_not_up_ok"] | result["lag_ok"])
+            result["prior_drop_ok"]
             & result["signal_volume_ok"]
+            & ((result["industry_data_ok"] & industry_rule_ok)
+               | (~result["industry_data_ok"] & result["today_not_up_ok"]))
         )
-        result["score"] = result["lag_vs_industry_pct"]
+        result["score"] = result["lag_vs_industry_pct"].where(result["industry_data_ok"], 0.0)
         columns = [
-            "code", "name", "industry", "close", "day_before_yesterday_return_pct",
+            "code", "name", "industry", "official_industry", "industry_index_code", "close", "day_before_yesterday_return_pct",
             "yesterday_return_pct", "today_return_pct",
-            "industry_return_pct", "lag_vs_industry_pct", "industry_return_source", "peer_count",
+            "industry_return_pct", "lag_vs_industry_pct", "industry_return_source",
             "prior_drop_ok", "industry_rebound_ok", "today_not_up_ok", "lag_ok", "industry_data_ok",
+            "industry_relationship_checked",
             "signal_day_volume", "signal_volume_ok", "score", "passes",
         ]
         return result[[column for column in columns if column in result]].sort_values("score", ascending=False)
@@ -405,7 +435,7 @@ def evaluate_signal(
     )
 
     if strategy_mode == "two_day_drop":
-        # 新策略只按跌幅、成交量异常和负面新闻评分，不再使用行业滞涨分。
+        # 保留旧字段名以兼容已有输出，但策略窗口改为最近三个交易日。
         result["drop_strength_pct"] = result[["prior_return_pct", "daily_return_pct", "two_days_ago_return_pct"]].min(axis=1).abs()
         result["score"] = (
             float(weights.get("drop_strength", 1.0)) * result["drop_strength_pct"]
@@ -436,13 +466,19 @@ def evaluate_signal(
         min_current_turnover = float(liquidity.get("min_current_turnover", 0.0))
         min_prior_median_turnover = float(liquidity.get("min_prior_median_turnover", 0.0))
         min_traded_days = int(liquidity.get("min_traded_days", 0))
+        three_day_returns = result[[
+            "two_days_ago_return_pct", "prior_return_pct", "daily_return_pct",
+        ]]
         result["large_drop_ok"] = (
-            (result["prior_return_pct"] <= float(config.get("large_drop_max_pct", -5.0)))
-            | (result["two_days_ago_return_pct"] <= float(config.get("large_drop_max_pct", -5.0)))
+            three_day_returns.le(float(config.get("large_drop_max_pct", -5.0))).any(axis=1)
         )
-        result["consecutive_down_ok"] = (
-            (result["prior_return_pct"] < 0.0) & (result["daily_return_pct"] < 0.0)
+        result["other_days_ok"] = (
+            three_day_returns.le(other_day_max_pct).all(axis=1)
         )
+        result["three_day_drop_ok"] = result["large_drop_ok"] & result["other_days_ok"]
+        # 兼容旧报告/下游脚本：旧字段反映新的三日条件。
+        result["two_day_drop_ok"] = result["three_day_drop_ok"]
+        result["consecutive_down_ok"] = result["other_days_ok"]
         result["liquidity_ok"] = (
             result["volume"].gt(0)
             & result["turnover"].ge(min_current_turnover)
@@ -452,8 +488,7 @@ def evaluate_signal(
         )
         result["passes"] = (
             common_filters
-            & result["large_drop_ok"]
-            & result["consecutive_down_ok"]
+            & result["three_day_drop_ok"]
             & result["liquidity_ok"]
         )
     else:
@@ -474,7 +509,8 @@ def evaluate_signal(
     if strategy_mode == "two_day_drop":
         columns.extend([
             "two_days_ago_return_pct", "turnover", "prior_turnover_median",
-            "prior_traded_days", "large_drop_ok", "consecutive_down_ok", "liquidity_ok",
+            "prior_traded_days", "large_drop_ok", "other_days_ok", "three_day_drop_ok",
+            "consecutive_down_ok", "liquidity_ok",
         ])
     if lot_value_column not in columns:
         columns.insert(6, lot_value_column)

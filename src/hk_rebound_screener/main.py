@@ -22,6 +22,7 @@ from .strategy import (
     append_forward_observations,
     evaluate_signal,
     load_config,
+    load_industry_returns,
     load_news,
     load_prices,
     load_universe,
@@ -159,6 +160,17 @@ def main() -> None:
     asof = args.asof or configured_test_asof or live_asof or str(prices["date"].max().date())
     if configured_test_asof and not args.asof:
         print(f"历史测试使用配置的信号日: {configured_test_asof}")
+    industry_returns = None
+    industry_returns_setting = config.get("industry_returns_path")
+    if strategy_mode == "industry_lag_rebound" and industry_returns_setting:
+        industry_returns_path = Path(industry_returns_setting)
+        if not industry_returns_path.is_absolute():
+            industry_returns_path = ROOT / industry_returns_path
+        if industry_returns_path.exists():
+            industry_returns = load_industry_returns(industry_returns_path)
+            print(f"官方行业指数数据: {industry_returns_path}")
+        else:
+            print(f"WARN 无官方行业指数数据: {industry_returns_path}; 仅判断今日涨跌")
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -203,7 +215,15 @@ def main() -> None:
             fundamentals = enrich_candidate_fundamentals(candidate_codes, market=market)
         else:
             news_status = preliminary_status
-    result = evaluate_signal(prices, universe, news, config, asof=asof, news_status=news_status)
+    result = evaluate_signal(
+        prices,
+        universe,
+        news,
+        config,
+        asof=asof,
+        news_status=news_status,
+        industry_returns=industry_returns,
+    )
     forward_days = int(config.get("append_forward_trading_days", 0))
     if forward_days:
         result = append_forward_observations(result, prices, asof=asof, trading_days=forward_days)
