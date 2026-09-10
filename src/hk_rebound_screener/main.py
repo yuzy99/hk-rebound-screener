@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -17,7 +18,12 @@ from .adapters import (
     fetch_usd_hkd_rate,
     fetch_yfinance_news,
 )
-from .notifier import format_markdown_report, send_webhook_notification, write_step_summary
+from .notifier import (
+    format_markdown_report,
+    render_html_report,
+    send_webhook_notification,
+    write_step_summary,
+)
 from .strategy import (
     append_forward_observations,
     evaluate_signal,
@@ -254,7 +260,22 @@ def main() -> None:
 
     report_md = format_markdown_report(result, market=market, asof=str(pd.Timestamp(asof).date()), config=config)
     write_step_summary(report_md)
-    send_webhook_notification(report_md, title=f"{market} 市场选股简报 ({pd.Timestamp(asof).date()})")
+    html_output_path = os.environ.get("REPORT_HTML_PATH")
+    if html_output_path:
+        template_path = os.environ.get(
+            "REPORT_TEMPLATE_PATH",
+            str(ROOT / "templates" / "stock_report_template.html"),
+        )
+        render_html_report(
+            report_md,
+            market=market,
+            asof=str(pd.Timestamp(asof).date()),
+            template_path=template_path,
+            output_path=html_output_path,
+        )
+        print(f"HTML 报告: {html_output_path}")
+    if not html_output_path:
+        send_webhook_notification(report_md, title=f"{market} 市场选股简报 ({pd.Timestamp(asof).date()})")
 
 
 if __name__ == "__main__":

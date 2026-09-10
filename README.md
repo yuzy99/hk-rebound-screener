@@ -73,12 +73,12 @@ live 模式会调用 AKShare 的港股全市场延时快照，再按 `universe.c
 
 仓库内的 `.github/workflows/scan-hk.yml` 和 `.github/workflows/scan-us.yml` 直接调用上面的 `--mode live --full-market` 入口，并固定使用最新港股和美股配置，不再提供旧策略选择。两个 workflow 都支持 Actions 页面上的 **Run workflow** 手动触发，并可选重建行业元数据缓存。
 
-- 港股：工作日 `08:30 UTC`，即 `Asia/Taipei` `16:30`，用于港股收市后的全市场扫描。
-- 美股：工作日 `21:30 UTC`，即台北时间次日 `05:30`；这个时间在美国夏令时和冬令时都位于收市之后。GitHub Actions 的 cron 只接受 UTC，workflow 同时设置 `TZ=Asia/Taipei` 供运行日志和日期处理使用。
+- 港股：工作日 `08:30 UTC`，即北京时间/香港时间 `16:30`，用于港股收市后的全市场扫描。
+- 美股：工作日北京时间 `08:00`（GitHub Actions `00:00 UTC`），周六北京时间 `14:00`（`06:00 UTC`）；workflow 使用 `TZ=Asia/Hong_Kong` 处理运行日志和日期。
 - 依赖从 `requirements.txt` 安装；扫描产生的 `outputs/*.csv` 会作为 Actions artifact 保存 14 天。
 - 基础行业元数据 `data/cache/*_industry.csv` 已随仓库纳入版本控制，避免首次运行时冷启动爬取导致超时；云端通过 Actions cache 继续持久化增量更新。
 - **免下载直观简报**：工作流会自动将入选标的或无标的提示写入 GitHub Actions 运行详情页的 **Summary** 区块，无需下载解压 CSV。
-- **机器人消息推送（可选）**：在 GitHub 仓库的 **Settings -> Secrets and variables -> Actions** 中添加名为 `NOTIFICATION_WEBHOOK` 的 Secret（填入企业微信、飞书或钉钉机器人的 Webhook 地址），工作流执行完毕后会自动将简报推送到群聊。
+- **机器人消息推送（可选）**：在 GitHub 仓库的 **Settings -> Secrets and variables -> Actions** 中添加名为 `NOTIFICATION_WEBHOOK` 的 Secret（填入 PushPlus Token 或其他支持的 Webhook 地址）。工作流会先把完整中文报告发布到 GitHub Pages，再只推送全部股票代码和对应的 GitHub Pages 链接；港股与美股共用 `templates/stock_report_template.html` 的手机模板。
 
 本仓库的 GitHub 远端为 `https://github.com/yuzy99/hk-rebound-screener.git`；推送后可在仓库的 **Actions** 页面启用或查看 workflow。定时任务只会使用最新策略配置，扫描产生的结果仍按现有 workflow 规则保存为 Actions artifact。
 

@@ -1,9 +1,9 @@
 ﻿name: HK full-market scan
 
-run-name: HK full-market scan (${{ github.event_name }})
+run-name: HK full-market scan and report (${{ github.event_name }})
 
 on:
-  # GitHub Actions cron uses UTC. 08:30 UTC = 16:30 Asia/Taipei,
+  # GitHub Actions cron uses UTC. 08:30 UTC = 16:30 Beijing/Hong Kong time,
   # after the regular Hong Kong session has closed.
   schedule:
     - cron: "30 8 * * 1-5"
@@ -17,19 +17,24 @@ on:
 
 permissions:
   contents: read
+  pages: write
+  id-token: write
 
 concurrency:
   group: hk-full-market-scan
   cancel-in-progress: false
 
 env:
-  TZ: Asia/Taipei
+  TZ: Asia/Hong_Kong
   PYTHONUNBUFFERED: "1"
 
 jobs:
   scan:
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -59,7 +64,8 @@ jobs:
       - name: Run HK full-market latest strategy
         env:
           PYTHONPATH: src
-          NOTIFICATION_WEBHOOK: ${{ secrets.NOTIFICATION_WEBHOOK }}
+          REPORT_HTML_PATH: reports/hk_latest.html
+          REPORT_TEMPLATE_PATH: templates/stock_report_template.html
         run: |
           CONFIG_FILE="config.hk.two_day_drop.json"
           echo "Using config file: $CONFIG_FILE"
@@ -75,6 +81,29 @@ jobs:
             args+=(--refresh-metadata)
           fi
           python -m hk_rebound_screener.main "${args[@]}"
+
+      - name: Configure GitHub Pages
+        if: success()
+        uses: actions/configure-pages@v5
+
+      - name: Upload HK HTML report
+        if: success()
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./reports
+
+      - name: Deploy HK HTML report
+        if: success()
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+      - name: Push HK codes and report link
+        if: success()
+        env:
+          PYTHONPATH: src
+          NOTIFICATION_WEBHOOK: ${{ secrets.NOTIFICATION_WEBHOOK }}
+          REPORT_PAGE_URL: https://yuzy99.github.io/hk-rebound-screener/hk_latest.html
+        run: python scripts/send_report_link.py --market HK --csv-glob 'outputs/scan_hk_*.csv'
 
       - name: Upload HK scan CSV
         if: always()

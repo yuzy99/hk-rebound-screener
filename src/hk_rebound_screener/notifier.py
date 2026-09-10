@@ -182,6 +182,66 @@ def _clean_stock_name(code: str, raw_name: str, market: str) -> str:
     return name
 
 
+def format_report_link_notification(
+    result: pd.DataFrame,
+    market: str,
+    asof: str,
+    report_url: str,
+) -> str:
+    """只生成推送所需的股票代码和完整报告链接。"""
+    passed = result.loc[result["passes"]].copy() if not result.empty and "passes" in result.columns else pd.DataFrame()
+    codes = [str(code).strip() for code in passed.get("code", pd.Series(dtype=str)).tolist()]
+    lines = [
+        f"📊 {market.upper()} 市场选股结果（{asof}）",
+        f"命中股票代码（共 {len(codes)} 只）",
+        "",
+    ]
+    if codes:
+        lines.extend(
+            " ｜ ".join(f"`{code}`" for code in codes[start : start + 8])
+            for start in range(0, len(codes), 8)
+        )
+    else:
+        lines.append("无命中股票")
+    lines.extend(["", f"🔗 完整报告：{report_url}"])
+    return "\n".join(lines)
+
+
+def render_html_report(
+    markdown: str,
+    market: str,
+    asof: str,
+    template_path: str | Path,
+    output_path: str | Path,
+) -> Path:
+    """把 Markdown 数据嵌入手机 HTML 模板，保持模板样式不变。"""
+    template = Path(template_path).read_text(encoding="utf-8")
+    start_marker = '<script type="text/markdown" id="raw-data">'
+    start = template.find(start_marker)
+    if start < 0:
+        raise ValueError("HTML 模板缺少 raw-data 数据区域")
+    data_start = start + len(start_marker)
+    data_end = template.find("</script>", data_start)
+    if data_end < 0:
+        raise ValueError("HTML 模板 raw-data 数据区域缺少结束标签")
+
+    market_name = "美股" if market.upper() == "US" else "港股"
+    content = markdown.replace("</script>", "<\\/script>").rstrip()
+    rendered = (
+        template[:data_start]
+        + "\n"
+        + content
+        + "\n  "
+        + template[data_end:]
+    )
+    rendered = rendered.replace("{{MARKET_NAME}}", market_name).replace("{{REPORT_DATE}}", str(asof))
+
+    output = Path(output_path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(rendered, encoding="utf-8")
+    return output
+
+
 def format_markdown_report(
     result: pd.DataFrame,
     market: str,
@@ -255,7 +315,9 @@ def format_markdown_report(
         code = str(row.get("code", "")).strip()
         name = _clean_stock_name(code, row.get("name", ""), market)
         official_industry = str(row.get("official_industry", "")).strip()
-        raw_industry = official_industry if bool(row.get("industry_data_ok", False)) else ""
+        raw_industry = str(row.get("industry", "")).strip()
+        if strategy_mode == "industry_lag_rebound" and not bool(row.get("industry_data_ok", False)):
+            raw_industry = ""
         industry = _translate_industry(raw_industry) if raw_industry else "无行业数据"
         close = f"{float(row['close']):.3f}".rstrip("0").rstrip(".") + f" {currency}" if pd.notna(row.get("close")) else "-"
         prior_value = row.get("yesterday_return_pct", row.get("prior_return_pct"))
@@ -277,8 +339,10 @@ def format_markdown_report(
         )
         turnover_value = pd.to_numeric(row.get("turnover"), errors="coerce")
         prior_turnover_value = pd.to_numeric(row.get("prior_turnover_median"), errors="coerce")
+        volume_value = pd.to_numeric(row.get("volume"), errors="coerce")
         turnover = _format_turnover(turnover_value, currency)
         prior_turnover = _format_turnover(prior_turnover_value, currency)
+        volume = f"{int(volume_value):,} 股" if pd.notna(volume_value) and volume_value >= 0 else "-"
         if pd.notna(turnover_value) and pd.notna(prior_turnover_value) and prior_turnover_value > 0:
             turnover_ratio = f"{float(turnover_value / prior_turnover_value):.2f}x"
         else:
@@ -328,9 +392,10 @@ def format_markdown_report(
 
         if strategy_mode == "two_day_drop":
             detail_lines = [
+                f"> 🏢 **所属行业**：{industry}",
                 f"> 📉 **三日信号**：**T-2** `{two_days_ago_ret}` ｜ **T-1** `{prior_ret}` ｜ **T** `{daily_ret}` ｜ **最大跌幅** `{drop_strength}`",
                 f"> 💵 **成交活跃度**：今日成交额 `{turnover}` ｜ 20 日中位数 `{prior_turnover}` ｜ 基准比 `{turnover_ratio}`",
-                f"> 📈 **量能**：今日成交量为近 20 日中位数的 `{vol_ratio}`",
+                f"> 📈 **量能**：今日成交量 `{volume}` ｜ 近 20 日中位数的 `{vol_ratio}`",
                 f"> ⭐ **综合评分**：**{score}**",
             ]
         else:

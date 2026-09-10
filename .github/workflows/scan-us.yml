@@ -1,12 +1,13 @@
 ﻿name: US full-market scan
 
-run-name: US full-market scan (${{ github.event_name }})
+run-name: US full-market scan and report (${{ github.event_name }})
 
 on:
-  # GitHub Actions cron uses UTC. 21:30 UTC is after the US close in both
-  # daylight-saving and standard time, and is 05:30 the next day in Taipei.
+  # GitHub Actions cron uses UTC. Beijing/Hong Kong time is UTC+8.
+  # 00:00 UTC is 08:00 on workdays; 06:00 UTC is 14:00 on Saturday.
   schedule:
-    - cron: "30 21 * * 1-5"
+    - cron: "0 0 * * 0-4"
+    - cron: "0 6 * * 6"
   workflow_dispatch:
     inputs:
       refresh_metadata:
@@ -17,19 +18,24 @@ on:
 
 permissions:
   contents: read
+  pages: write
+  id-token: write
 
 concurrency:
   group: stock-scanner-us
   cancel-in-progress: false
 
 env:
-  TZ: Asia/Taipei
+  TZ: Asia/Hong_Kong
   PYTHONUNBUFFERED: "1"
 
 jobs:
   scan:
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -65,7 +71,8 @@ jobs:
       - name: Run US full-market latest strategy
         env:
           PYTHONPATH: src
-          NOTIFICATION_WEBHOOK: ${{ secrets.NOTIFICATION_WEBHOOK }}
+          REPORT_HTML_PATH: reports/us_latest.html
+          REPORT_TEMPLATE_PATH: templates/stock_report_template.html
         run: |
           CONFIG_FILE="config.us.two_day_drop.json"
           echo "Using config file: $CONFIG_FILE"
@@ -80,6 +87,29 @@ jobs:
             args+=(--refresh-metadata)
           fi
           python -m hk_rebound_screener.main "${args[@]}"
+
+      - name: Configure GitHub Pages
+        if: success()
+        uses: actions/configure-pages@v5
+
+      - name: Upload US HTML report
+        if: success()
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./reports
+
+      - name: Deploy US HTML report
+        if: success()
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+      - name: Push US codes and report link
+        if: success()
+        env:
+          PYTHONPATH: src
+          NOTIFICATION_WEBHOOK: ${{ secrets.NOTIFICATION_WEBHOOK }}
+          REPORT_PAGE_URL: https://yuzy99.github.io/hk-rebound-screener/us_latest.html
+        run: python scripts/send_report_link.py --market US --csv-glob 'outputs/scan_us_*.csv'
 
       - name: Save yfinance history cache
         if: always()

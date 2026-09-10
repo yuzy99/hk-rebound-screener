@@ -531,7 +531,7 @@ def evaluate_signal(
             & lag_condition
         )
     columns = [
-        "code", "name", "industry", "close", "lot_size", "lot_value_hkd", "prior_return_pct",
+        "code", "name", "industry", "close", "volume", "lot_size", "lot_value_hkd", "prior_return_pct",
         "daily_return_pct", "drop_strength_pct", "two_day_drop_ok", "industry_avg_return_pct", "lag_vs_industry_pct", "peer_count",
         "volume_ratio", "volume_anomaly", "negative_news_score", "negative_news_hits", "news_fetch_ok", "usd_hkd_rate", "score", "passes",
     ]
