@@ -106,6 +106,25 @@ def _format_market_cap(val: Any, currency: str) -> str:
         return "-"
 
 
+def _format_turnover(val: Any, currency: str) -> str:
+    if pd.isna(val) or val is None:
+        return "-"
+    try:
+        val_num = float(val)
+        if val_num < 0:
+            return "-"
+        prefix = "US$" if currency == "USD" else "HK$"
+        if val_num >= 1e9:
+            return f"{prefix}{val_num / 1e9:.2f}b"
+        if val_num >= 1e6:
+            return f"{prefix}{val_num / 1e6:.2f}m"
+        if val_num >= 1e3:
+            return f"{prefix}{val_num / 1e3:.1f}k"
+        return f"{prefix}{val_num:.0f}"
+    except Exception:
+        return "-"
+
+
 def _format_pe(val: Any) -> str:
     if pd.isna(val) or val is None:
         return "-"
@@ -235,14 +254,22 @@ def format_markdown_report(
         daily_ret = f"{float(daily_value):+.2f}%" if pd.notna(daily_value) else "-"
         ind_avg = f"{float(industry_value):+.2f}%" if pd.notna(industry_value) else "-"
         lag = f"{float(row['lag_vs_industry_pct']):+.2f}%" if pd.notna(row.get("lag_vs_industry_pct")) else "-"
-        signal_volume = (
-            f"{int(float(row['signal_day_volume'])):,} 股"
-            if pd.notna(row.get("signal_day_volume"))
-            else "-"
-        )
         vol_ratio = f"{float(row['volume_ratio']):.2f}x" if pd.notna(row.get("volume_ratio")) else "-"
         score = f"{float(row['score']):.2f}" if pd.notna(row.get("score")) else "-"
         score_label = "落后行业排序分" if strategy_mode == "industry_lag_rebound" else "综合评分"
+        drop_strength = (
+            f"−{abs(float(row['drop_strength_pct'])):.2f}%"
+            if pd.notna(row.get("drop_strength_pct"))
+            else "-"
+        )
+        turnover_value = pd.to_numeric(row.get("turnover"), errors="coerce")
+        prior_turnover_value = pd.to_numeric(row.get("prior_turnover_median"), errors="coerce")
+        turnover = _format_turnover(turnover_value, currency)
+        prior_turnover = _format_turnover(prior_turnover_value, currency)
+        if pd.notna(turnover_value) and pd.notna(prior_turnover_value) and prior_turnover_value > 0:
+            turnover_ratio = f"{float(turnover_value / prior_turnover_value):.2f}x"
+        else:
+            turnover_ratio = "-"
 
         forward_lines: list[str] = []
         for offset in range(1, int(config.get("append_forward_trading_days", 0)) + 1):
@@ -286,16 +313,28 @@ def format_markdown_report(
             else []
         )
 
+        if strategy_mode == "two_day_drop":
+            detail_lines = [
+                f"> 📉 **三日信号**：**T-2** `{two_days_ago_ret}` ｜ **T-1** `{prior_ret}` ｜ **T** `{daily_ret}` ｜ **最大跌幅** `{drop_strength}`",
+                f"> 💵 **成交活跃度**：今日成交额 `{turnover}` ｜ 20 日中位数 `{prior_turnover}` ｜ 基准比 `{turnover_ratio}`",
+                f"> 📈 **量能**：今日成交量为近 20 日中位数的 `{vol_ratio}`",
+                f"> ⭐ **综合评分**：**{score}**",
+            ]
+        else:
+            detail_lines = [
+                f"> 🏢 **所属行业**：{industry}",
+                f"> 📉 **两日涨跌**：**今日(T)** `{daily_ret}` ｜ **昨日(T-1)** `{prior_ret}`",
+                *drop_window_line,
+                f"> 🎯 **{industry_label}**：`{ind_avg}`{source} ｜ **落后行业**：`{lag}`",
+                f"> 📦 **策略今日成交量**：`{int(float(row['signal_day_volume'])):,} 股`" if pd.notna(row.get("signal_day_volume")) else "> 📦 **策略今日成交量**：`-`",
+                f"> 📈 **异动量比**：`{vol_ratio}` ｜ ⭐ **{score_label}**：**{score}**",
+            ]
+
         lines.extend([
             f"### {rank:02d}. `{code}` {name}",
-            f"> 🏢 **所属行业**：{industry}",
             f"> 💰 **最新现价**：`{close}` ｜ **总市值**：`{market_cap_str}`",
             f"> 📊 **估值指标**：**PE** `{pe_str}` ｜ **PB** `{pb_str}`",
-            f"> 📉 **{'三日' if strategy_mode == 'two_day_drop' else '两日'}涨跌**：**今日(T)** `{daily_ret}` ｜ **昨日(T-1)** `{prior_ret}`",
-            *drop_window_line,
-            f"> 🎯 **{industry_label}**：`{ind_avg}`{source} ｜ **落后行业**：`{lag}`",
-            f"> 📦 **策略今日成交量**：`{signal_volume}`",
-            f"> 📈 **异动量比**：`{vol_ratio}` ｜ ⭐ **{score_label}**：**{score}**",
+            *detail_lines,
             *forward_lines,
             "",
             "---",
