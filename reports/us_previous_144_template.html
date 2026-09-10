@@ -1876,26 +1876,40 @@
         const changeColor = isPositive ? 'text-emerald-700' : 'text-rose-700';
         const changeBg = isPositive ? 'bg-emerald-50 border-emerald-100/60' : 'bg-rose-50 border-rose-100/60';
         
-        // Build the raw details HTML
-        const rawHtml = stock.rawLines.map(line => {
-          const text = line.replace(/^- /, '');
-          const isHighlight = text.includes('大跌条件') || text.includes('综合评分') || text.includes('今日');
-          
-          if (isHighlight) {
+        // 将 Markdown 明细转换为安全、易读的中文分行信息
+        const escapeHtml = value => String(value).replace(/[&<>"']/g, char => ({
+          '&': '&amp;',
+          '<': '&lt;',
+          '>': '&gt;',
+          '"': '&quot;',
+          "'": '&#39;'
+        }[char]));
+        const formatDetailLine = line => {
+          const cleanText = line
+            .replace(/^\s*[-*>]\s*/, '')
+            .replace(/^[^\p{L}\p{N}]+/u, '')
+            .replace(/\*\*/g, '')
+            .replace(/`/g, '')
+            .trim();
+          return cleanText.split(/\s*｜\s*/).map(segment => {
+            const separator = segment.indexOf('：');
+            const label = separator >= 0 ? segment.slice(0, separator).trim() : '';
+            const value = separator >= 0 ? segment.slice(separator + 1).trim() : segment;
+            if (!label) return `<p class="text-[13px] leading-relaxed text-zinc-500 font-medium">${escapeHtml(value)}</p>`;
             return `
-              <div class="flex items-start gap-3 p-3 rounded-xl bg-zinc-50 border border-zinc-100">
-                <i data-lucide="check-circle-2" class="w-4 h-4 text-zinc-800 shrink-0 mt-0.5"></i>
-                <p class="text-[13px] leading-relaxed text-zinc-900 font-semibold">${text}</p>
+              <div class="flex items-start justify-between gap-3 px-3 py-1.5 rounded-lg bg-zinc-50/70">
+                <span class="text-[12px] leading-relaxed text-zinc-500 font-semibold shrink-0">${escapeHtml(label)}</span>
+                <span class="text-[13px] leading-relaxed text-zinc-900 font-medium text-right break-words">${escapeHtml(value)}</span>
               </div>
             `;
-          }
-          return `
-            <div class="flex items-start gap-3 px-3">
-              <div class="w-1.5 h-1.5 rounded-full bg-zinc-300 mt-2 shrink-0"></div>
-              <p class="text-[13px] leading-relaxed text-zinc-500 font-medium">${text}</p>
-            </div>
-          `;
-        }).join('<div class="h-1"></div>');
+          }).join('');
+        };
+        const rawHtml = stock.rawLines.map(line => {
+          const cleanText = line.replace(/\*\*/g, '').replace(/`/g, '');
+          const isHighlight = cleanText.includes('大跌条件') || cleanText.includes('综合评分') || cleanText.includes('今日');
+          const detailClass = isHighlight ? 'p-2 rounded-xl bg-zinc-50 border border-zinc-100' : 'px-0';
+          return `<div class="${detailClass} flex flex-col gap-1">${formatDetailLine(line)}</div>`;
+        }).join('<div class="h-2"></div>');
 
         // Card Container
         const card = document.createElement('div');
