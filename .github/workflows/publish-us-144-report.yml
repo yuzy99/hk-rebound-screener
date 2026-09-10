@@ -1,4 +1,4 @@
-name: Publish and send previous US 144 report
+name: Publish previous US 144 report
 
 on:
   workflow_dispatch:
@@ -30,8 +30,3 @@ jobs:
       - name: Deploy report
         id: deployment
         uses: actions/deploy-pages@v4
-      - name: Send report link through PushPlus
-        env:
-          NOTIFICATION_WEBHOOK: ${{ secrets.NOTIFICATION_WEBHOOK }}
-          REPORT_PAGE_URL: ${{ steps.deployment.outputs.page_url }}
-        run: python scripts/send_report_link.py
