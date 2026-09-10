@@ -46,6 +46,8 @@ jobs:
         with:
           path: |
             data/cache
+            data/yfinance_cache
+            data/akshare_cache
             ~/.cache/py-yfinance
           key: ${{ runner.os }}-hk-market-cache-${{ github.run_id }}
           restore-keys: |
