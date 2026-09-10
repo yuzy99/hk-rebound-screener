@@ -1796,10 +1796,10 @@
             const vaMatch = line.match(/量能异常 \`(.*?)\`/);
             if (vaMatch) volAnomaly = vaMatch[1];
           }
-          if (line.includes('量能')) {
+          if (line.includes('量能') && !line.includes('量价特征')) {
             const values = [...line.matchAll(/\`(.*?)\`/g)].map(match => match[1]);
             if (values.length > 0 && line.includes('今日成交量')) volume = values[0];
-            if (values.length > 0) volRatio = values[values.length - 1];
+            if (values.length > 0 && line.includes('近 20 日中位数')) volRatio = values[values.length - 1];
           }
           if (line.includes('三日走势：')) {
             const cMatch = line.match(/今日 \`(.*?)\`/);
