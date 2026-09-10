@@ -181,8 +181,6 @@ def format_markdown_report(
     currency = "USD" if market_upper == "US" else "HKD"
 
     passed = result.loc[result["passes"]].copy() if not result.empty and "passes" in result.columns else pd.DataFrame()
-    top_n = int(config.get("top_n", 20))
-    passed = passed.head(top_n)
 
     lines: list[str] = [
         f"## 📊 {market_upper} 市场选股简报 ({asof})",
