@@ -1,0 +1,42 @@
+name: Resend existing HK report
+
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+env:
+  TZ: Asia/Hong_Kong
+  PYTHONUNBUFFERED: "1"
+
+jobs:
+  resend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install notification dependencies
+        run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt
+
+      - name: Download previous successful HK scan artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run download 34501885211 --repo "$GITHUB_REPOSITORY" --name hk-scan-9 --dir resend_input
+
+      - name: Resend HK codes and report link
+        env:
+          PYTHONPATH: src
+          NOTIFICATION_WEBHOOK: ${{ secrets.NOTIFICATION_WEBHOOK }}
+          REPORT_PAGE_URL: https://yuzy99.github.io/hk-rebound-screener/hk_latest.html
+        run: python scripts/send_report_link.py --market HK --csv-glob 'resend_input/**/*.csv'
