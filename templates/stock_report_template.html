@@ -1771,7 +1771,7 @@
         if (lines.length === 0) continue;
         
         const titleLine = lines[0];
-        const idMatch = titleLine.match(/(\d+)\.\s+([A-Za-z0-9._-]+)/);
+        const idMatch = titleLine.match(/(\d+)\.\s+`?([A-Za-z0-9._-]+)`?/);
         if (!idMatch) continue;
         
         const id = idMatch[1];

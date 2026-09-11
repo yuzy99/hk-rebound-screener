@@ -74,3 +74,11 @@ def test_current_score_formula_is_in_markdown_and_html_report(tmp_path: Path) ->
     html = output_path.read_text(encoding="utf-8")
     assert "当前评分公式" in html
     assert "S = min(D, 15) + 2 × log₂(min(max(R, 1), 8)) − N" in html
+
+
+def test_html_template_parses_backtick_quoted_tickers() -> None:
+    template = (
+        Path(__file__).resolve().parents[1] / "templates" / "stock_report_template.html"
+    ).read_text(encoding="utf-8")
+
+    assert "(\\d+)\\.\\s+`?([A-Za-z0-9._-]+)`?" in template
