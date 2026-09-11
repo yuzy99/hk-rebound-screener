@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 from datetime import date, timedelta
 from pathlib import Path
@@ -27,6 +28,7 @@ from .notifier import (
 )
 from .strategy import (
     append_forward_observations,
+    apply_liquidity_tier,
     evaluate_signal,
     load_config,
     load_industry_returns,
@@ -74,6 +76,10 @@ def main() -> None:
     config = load_config(args.config)
     market = str(config.get("market", "HK")).upper()
     strategy_mode = str(config.get("strategy_mode", "rebound")).lower()
+    # 同一份扫描结果按不同流动性门槛切档，每档一个 CSV + 一个页面。
+    # 只有配了 liquidity_tiers 的市场（目前仅美股）才走这条路径，港股逐字节不变。
+    tiers = config.get("liquidity_tiers") or []
+    tiered = bool(tiers) and strategy_mode == "two_day_drop"
     if args.mode == "backtest" and strategy_mode == "industry_lag_rebound":
         raise SystemExit("industry_lag_rebound 当前只生成筛选结果，不支持回测模式")
     default_files = {
@@ -230,13 +236,27 @@ def main() -> None:
                 name_map = dict(zip(cn_names["code"], cn_names["name"]))
                 universe["name"] = universe["code"].map(name_map).fillna(universe["name"])
 
-        # 新闻与估值是第二阶段：先筛价格/行业条件，再对候选股抓新闻和PE/PB/市值
+        # 新闻与估值是第二阶段：先筛价格/行业条件，再对候选股抓新闻和PE/PB/市值。
+        # 初筛必须用最松的那一档门槛：若按 200M 初筛，50–200M 那批票根本不会被送进
+        # 新闻抓取，negative_news_score 会被 fillna 成 0，在 50M 页上等同于「没有新闻
+        # 风险」。放宽初筛只会让候选集变大 —— 最终那次 evaluate_signal 仍用原 config，
+        # 官方 CSV 和 200M 名单因此完全不受影响。
+        preliminary_config = config
+        if tiered:
+            loosest = min(float(tier["min_prior_median_turnover"]) for tier in tiers)
+            preliminary_config = {
+                **config,
+                "liquidity_filter": {
+                    **config.get("liquidity_filter", {}),
+                    "min_prior_median_turnover": loosest,
+                },
+            }
         preliminary_status = pd.DataFrame({"code": universe["code"], "news_fetch_ok": True})
         preliminary = evaluate_signal(
             prices,
             universe,
             news,
-            config,
+            preliminary_config,
             asof=asof,
             news_status=preliminary_status,
         )
@@ -281,22 +301,82 @@ def main() -> None:
 
     report_md = format_markdown_report(result, market=market, asof=str(pd.Timestamp(asof).date()), config=config)
     write_step_summary(report_md)
+    template_path = os.environ.get(
+        "REPORT_TEMPLATE_PATH",
+        str(ROOT / "templates" / "stock_report_template.html"),
+    )
     html_output_path = os.environ.get("REPORT_HTML_PATH")
-    if html_output_path:
-        template_path = os.environ.get(
-            "REPORT_TEMPLATE_PATH",
-            str(ROOT / "templates" / "stock_report_template.html"),
+    html_dir = os.environ.get("REPORT_HTML_DIR")
+    asof_text = str(pd.Timestamp(asof).date())
+    market_label = "美股" if market == "US" else "港股"
+    if html_dir:
+        if not tiered:
+            raise SystemExit("REPORT_HTML_DIR 需要配置 liquidity_tiers；单页市场请继续用 REPORT_HTML_PATH")
+        # 按档发布：每档一个 CSV、一个页面，外加一份清单。
+        # 推送脚本只读清单 —— 两个 CSV 相隔几秒写完，glob + mtime 排序不可靠。
+        tiers_dir = Path(html_dir)
+        tiers_dir.mkdir(parents=True, exist_ok=True)
+        manifest_tiers: list[dict[str, object]] = []
+        for tier in tiers:
+            threshold = float(tier["min_prior_median_turnover"])
+            label = str(tier["label"])
+            slug = str(tier["slug"])
+            tier_result = apply_liquidity_tier(result, config, threshold)
+            tier_csv = output_dir / f"scan_{market.lower()}{strategy_suffix}_{slug}_{asof_text}.csv"
+            tier_result.to_csv(tier_csv, index=False, encoding="utf-8-sig")
+            tier_config = {
+                **config,
+                "liquidity_filter": {
+                    **config.get("liquidity_filter", {}),
+                    "min_prior_median_turnover": threshold,
+                },
+            }
+            tier_md = format_markdown_report(
+                tier_result,
+                market=market,
+                asof=asof_text,
+                config=tier_config,
+                tier_label=f"{label} 流动性门槛",
+            )
+            write_step_summary(tier_md)
+            render_html_report(
+                tier_md,
+                market=market,
+                asof=asof_text,
+                template_path=template_path,
+                output_path=tiers_dir / f"{market.lower()}_{slug}.html",
+                market_label=f"{market_label}（{label} 流动性门槛）",
+            )
+            count = int(tier_result["passes"].sum())
+            print(f"档位 {label}: 命中 {count} 只；CSV: {tier_csv}")
+            manifest_tiers.append({
+                "label": label,
+                "slug": slug,
+                "csv": Path(os.path.relpath(tier_csv, ROOT)).as_posix(),
+                "count": count,
+            })
+        manifest_path = tiers_dir / f"{market.lower()}_tiers.json"
+        manifest_path.write_text(
+            json.dumps(
+                {"market": market, "asof": asof_text, "tiers": manifest_tiers},
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
         )
+        print(f"档位清单: {manifest_path}")
+    elif html_output_path:
         render_html_report(
             report_md,
             market=market,
-            asof=str(pd.Timestamp(asof).date()),
+            asof=asof_text,
             template_path=template_path,
             output_path=html_output_path,
         )
         print(f"HTML 报告: {html_output_path}")
-    if not html_output_path:
-        send_webhook_notification(report_md, title=f"{market} 市场选股简报 ({pd.Timestamp(asof).date()})")
+    # 设了 REPORT_HTML_DIR 就由按档推送独挑通知，这里绝不能补发第二条。
+    if not html_dir and not html_output_path:
+        send_webhook_notification(report_md, title=f"{market} 市场选股简报 ({asof_text})")
 
 
 if __name__ == "__main__":

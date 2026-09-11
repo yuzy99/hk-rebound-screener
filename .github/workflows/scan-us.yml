@@ -17,7 +17,8 @@ on:
         type: boolean
 
 permissions:
-  contents: read
+  # 报告页面要自动提交回仓库，否则每天 16:30 的港股部署会把美股页面抹成 404。
+  contents: write
   pages: write
   id-token: write
 
@@ -39,6 +40,9 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          # git pull --rebase 需要 merge base，浅克隆没有。
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -71,7 +75,7 @@ jobs:
       - name: Run US full-market latest strategy
         env:
           PYTHONPATH: src
-          REPORT_HTML_PATH: reports/us_latest.html
+          REPORT_HTML_DIR: reports
           REPORT_TEMPLATE_PATH: templates/stock_report_template.html
         run: |
           CONFIG_FILE="config.us.two_day_drop.json"
@@ -88,6 +92,27 @@ jobs:
           fi
           python -m hk_rebound_screener.main "${args[@]}"
 
+      - name: Commit published reports
+        continue-on-error: true        # 推送撞车绝不能挡住部署和通知
+        run: |
+          set -uo pipefail
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add reports/
+          git diff --cached --quiet && { echo "报告无变化"; exit 0; }
+          git commit -m "chore(report): publish US tier reports $(TZ=Asia/Hong_Kong date +%F) [skip ci]"
+          for i in 1 2 3 4 5; do
+            git push origin HEAD:main && exit 0
+            echo "推送被拒，rebase 重试 ($i)"; git pull --rebase origin main || true
+          done
+          echo "WARN: 报告推送失败，本次部署可能不含最新报告"
+
+      - name: Sync reports with main before deploy
+        run: |
+          git fetch origin main
+          git merge --no-edit origin/main || git checkout origin/main -- reports/
+          ls -la reports/
+
       - name: Configure GitHub Pages
         if: success()
         uses: actions/configure-pages@v5
@@ -103,13 +128,17 @@ jobs:
         id: deployment
         uses: actions/deploy-pages@v4
 
-      - name: Push US codes and report link
+      - name: Push US codes and report links
         if: success()
         env:
           PYTHONPATH: src
           NOTIFICATION_WEBHOOK: ${{ secrets.NOTIFICATION_WEBHOOK }}
-          REPORT_PAGE_URL: https://yuzy99.github.io/hk-rebound-screener/us_latest.html
-        run: python scripts/send_report_link.py --market US --csv-glob 'outputs/scan_us_*.csv'
+          REPORT_PAGE_BASE_URL: https://yuzy99.github.io/hk-rebound-screener
+        run: |
+          python scripts/send_report_link.py \
+            --market US \
+            --tiers-manifest reports/us_tiers.json \
+            --page-base-url "$REPORT_PAGE_BASE_URL"
 
       - name: Save yfinance history cache
         if: always()

@@ -182,6 +182,16 @@ def _clean_stock_name(code: str, raw_name: str, market: str) -> str:
     return name
 
 
+def _format_code_chunks(codes: list[str]) -> list[str]:
+    """每行 8 个反引号代码，和单档推送保持同一排版。"""
+    if not codes:
+        return ["无命中股票"]
+    return [
+        " ｜ ".join(f"`{code}`" for code in codes[start : start + 8])
+        for start in range(0, len(codes), 8)
+    ]
+
+
 def format_report_link_notification(
     result: pd.DataFrame,
     market: str,
@@ -196,14 +206,31 @@ def format_report_link_notification(
         f"命中股票代码（共 {len(codes)} 只）",
         "",
     ]
-    if codes:
-        lines.extend(
-            " ｜ ".join(f"`{code}`" for code in codes[start : start + 8])
-            for start in range(0, len(codes), 8)
-        )
-    else:
-        lines.append("无命中股票")
+    lines.extend(_format_code_chunks(codes))
     lines.extend(["", f"🔗 完整报告：{report_url}"])
+    return "\n".join(lines)
+
+
+def format_tiered_report_link_notification(
+    tiers: list[dict[str, Any]],
+    market: str,
+    asof: str,
+) -> str:
+    """把多档名单拼成一条推送：每档一段代码列表加该档自己的报告链接。
+
+    tiers 里每项形如 {"label": "200M", "codes": [...], "report_url": "..."}。
+    刻意不接收「档位字符串当 market」—— 报告渲染的货币由 market 决定，
+    档位只能走 label，否则 "US · 50M" 会让美股价格按港币渲染。
+    """
+    lines = [f"📊 {market.upper()} 市场选股结果（{asof}）"]
+    for tier in tiers:
+        codes = [str(code).strip() for code in tier.get("codes", [])]
+        lines.extend([
+            "",
+            f"【{tier['label']} 流动性门槛】命中股票代码（共 {len(codes)} 只）",
+        ])
+        lines.extend(_format_code_chunks(codes))
+        lines.append(f"🔗 完整报告：{tier['report_url']}")
     return "\n".join(lines)
 
 
@@ -213,6 +240,7 @@ def render_html_report(
     asof: str,
     template_path: str | Path,
     output_path: str | Path,
+    market_label: str | None = None,
 ) -> Path:
     """把 Markdown 数据嵌入手机 HTML 模板，保持模板样式不变。"""
     template = Path(template_path).read_text(encoding="utf-8")
@@ -225,7 +253,7 @@ def render_html_report(
     if data_end < 0:
         raise ValueError("HTML 模板 raw-data 数据区域缺少结束标签")
 
-    market_name = "美股" if market.upper() == "US" else "港股"
+    market_name = market_label or ("美股" if market.upper() == "US" else "港股")
     content = markdown.replace("</script>", "<\\/script>").rstrip()
     rendered = (
         template[:data_start]
@@ -247,6 +275,7 @@ def format_markdown_report(
     market: str,
     asof: str,
     config: dict[str, Any],
+    tier_label: str | None = None,
 ) -> str:
     """将选股结果格式化为美观、结构清晰的 Markdown 报表。"""
     strategy_mode = str(config.get("strategy_mode", "rebound")).lower()
@@ -284,8 +313,9 @@ def format_markdown_report(
 
     passed = result.loc[result["passes"]].copy() if not result.empty and "passes" in result.columns else pd.DataFrame()
 
+    tier_suffix = f" · {tier_label}" if tier_label else ""
     lines: list[str] = [
-        f"## 📊 {market_upper} 市场选股简报 ({asof})",
+        f"## 📊 {market_upper} 市场选股简报 ({asof}){tier_suffix}",
         "",
     ]
 
@@ -329,7 +359,8 @@ def format_markdown_report(
         ]
         if liquidity_log_weight > 0:
             definition_parts.append(
-                f"`L` 为 20 日中位成交额相对流动性门槛的倍数（1 倍以下不加分，{liquidity_ratio_cap:g} 倍封顶）"
+                f"`L` 为 20 日中位成交额相对流动性门槛的倍数（1 倍以下不加分，{liquidity_ratio_cap:g} 倍封顶；"
+                "基准固定为官方门槛，不随档位变化）"
             )
         definition_parts.append(
             f"`N` 为 48 小时内按风险类别去重后的新闻风险分（累计到 {news_threshold:g} 分才淘汰，未达则仅扣分）"

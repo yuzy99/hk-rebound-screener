@@ -8,7 +8,7 @@
 
 1. 最近三个交易日中至少有一天跌幅 `<= -4.5%`；
 2. 另外两天收跌或涨幅 `<= 1.5%`；
-3. 当日必须有成交，当前成交额 `>= HK$2,000,000`、过去 20 日成交额中位数 `>= HK$200,000,000`，且过去 20 日至少有 12 个交易日成交；
+3. 当日必须有成交，当前成交额 `>= HK$2,000,000`、过去 20 日成交额中位数 `>= HK$200,000,000`，且过去 20 日至少有 12 个交易日成交。**美股每次扫描额外多发一份 50M 档名单**（过去 20 日中位成交额 `>= US$50,000,000`），两档各自成页、互不混淆，见下文「美股双档」；
 4. 继续执行普通股、每手金额 `<= HK$30,000` 过滤；48 小时新闻风险为分级扣分——累计到 10 分才淘汰，单类命中仅扣分，抓取失败只标注“未核实”而不剔除；
 5. 按 `min(最大单日跌幅, 15) + 2 × log₂(量比封顶 8) + 2.5 × log₁₀(20 日中位成交额相对门槛的倍数，封顶 1000) − 新闻风险分` 排序；行业数据仅作参考，不参与通过条件和评分。
 
@@ -32,6 +32,26 @@ python -m hk_rebound_screener.main --mode live --full-market --config .\config.h
 输出会额外包含 `two_days_ago_return_pct`、`turnover`、`prior_turnover_median`、`prior_traded_days` 和 `liquidity_ok`，便于复核为什么某只股票被剔除。
 
 美股对应配置为 `config.us.two_day_drop.json`，官方流动性门槛同样是 `2,000,000 / 200,000,000`，但单位为美元，筛选窗口和跌幅条件相同。GitHub Actions 的定时运行和手动运行均固定使用这两个最新配置；旧配置文件仅保留作本地兼容和历史参考，不再作为 GitHub 扫描入口。
+
+### 美股双档（200M / 50M）
+
+2026-09-11 的两档回测（131 个信号日，2026-03-02 → 2026-09-04，T+1 开盘买 → T+3 收盘卖，扣同档流动性池中位）显示两档都显著为正，200M 每笔质量更高、50M 总收益更高：
+
+| 档位 | 笔数 | +5% 止盈超额 | t 值 |
+|---|---|---|---|
+| 200M | 4,141 | +0.40% | 4.70 |
+| 50M 全档 | 9,760 | +0.32% | 5.92 |
+| 50M 独有（增量 69 只） | 4,558 | +0.21% | 2.83 |
+
+所以美股每天同时出两份名单：`us_200m.html`（官方 200M 档）和 `us_50m.html`（50M 全档，**含**已经过 200M 的那批）。港股不拆档，仍是单页 `hk_latest.html`。
+
+- 配置写在 `config.us.two_day_drop.json` 的 `liquidity_tiers`，每档的 `slug` 同时决定 CSV 名（`scan_us_two_day_drop_<slug>_<date>.csv`）、页面名和推送链接。没有这个键的市场走原来的单页路径。
+- **一次扫描出两档，绝不跑两遍**：行情、新闻、基本面只做一次，两档从同一份结果派生。
+- 初筛用最松的那档门槛。若按 200M 初筛，50–200M 那批票根本不会去抓新闻，`negative_news_score` 会被 `fillna` 成 0，在 50M 页上等同于「没有新闻风险」。最终那次 `evaluate_signal` 仍用官方 config，官方 CSV 不变。
+- **`score` 不按档重算**（`apply_liquidity_tier` 只重算 `liquidity_ok` 和 `passes`）：同一只票在两个页面上分数相同，两页可直接对比；`L` 的对数基准固定为官方 200M 门槛。代价是 50M 页上 50–200M 区间的票流动性分量被 `max(L, 1)` 夹到 0，排序略吃亏。
+- 推送只有**一条**消息，里面两档各一段代码列表加各自的链接，由 `scripts/send_report_link.py --tiers-manifest` 读 `reports/us_tiers.json` 生成（清单是唯一数据源，两个 CSV 相隔几秒写完，不能靠 glob + mtime 排序）。
+
+> ⚠️ 分档只动 `liquidity_ok`，不动跌幅权重。上面那条「改门槛和改权重必须一起验证」的警告仍然成立 —— 50M 档的统计是**另一套**门槛下的结论，不能拿它的 IC 去调权重。
 
 ## 先跑确定性示例
 
@@ -86,9 +106,11 @@ live 模式会调用 AKShare 的港股全市场延时快照，再按 `universe.c
 - 港股：工作日 `08:30 UTC`，即北京时间/香港时间 `16:30`，用于港股收市后的全市场扫描。
 - 美股：工作日北京时间 `08:00`（GitHub Actions `00:00 UTC`），周六北京时间 `14:00`（`06:00 UTC`）；workflow 使用 `TZ=Asia/Hong_Kong` 处理运行日志和日期。
 - 依赖从 `requirements.txt` 安装；扫描产生的 `outputs/*.csv` 会作为 Actions artifact 保存 14 天。
+- **报告页面自动回提交**：两个 workflow 在扫描后把 `reports/*.html` 提交回 `main`（`contents: write` + `fetch-depth: 0`），部署前再和 `origin/main` 同步一次。这不是可选项 —— `upload-pages-artifact` + `path: ./reports` 每次部署**整体替换站点**，只有提交进仓库的页面才扛得住另一次部署。2026-09-11 实测 `us_latest.html` 就是这样被每天 16:30 的港股任务抹成 404 的。
+  > 前提是仓库 **Settings → Actions → General → Workflow permissions** 设为 **Read and write**；只读会让 `contents: write` 被降级、`git push` 直接 403（推送步骤标了 `continue-on-error`，失败只告警，不会挡住部署和通知）。
 - 基础行业元数据 `data/cache/*_industry.csv` 已随仓库纳入版本控制，避免首次运行时冷启动爬取导致超时；云端通过 Actions cache 继续持久化增量更新。
 - **免下载直观简报**：工作流会自动将入选标的或无标的提示写入 GitHub Actions 运行详情页的 **Summary** 区块，无需下载解压 CSV。
-- **机器人消息推送（可选）**：在 GitHub 仓库的 **Settings -> Secrets and variables -> Actions** 中添加名为 `NOTIFICATION_WEBHOOK` 的 Secret（填入 PushPlus Token 或其他支持的 Webhook 地址）。工作流会先把完整中文报告发布到 GitHub Pages，再只推送全部股票代码和对应的 GitHub Pages 链接；港股与美股共用 `templates/stock_report_template.html` 的手机模板。
+- **机器人消息推送（可选）**：在 GitHub 仓库的 **Settings -> Secrets and variables -> Actions** 中添加名为 `NOTIFICATION_WEBHOOK` 的 Secret（填入 PushPlus Token 或其他支持的 Webhook 地址）。工作流会先把完整中文报告发布到 GitHub Pages，再只推送全部股票代码和对应的 GitHub Pages 链接；港股与美股共用 `templates/stock_report_template.html` 的手机模板。港股是一条消息一个链接；美股是一条消息**两个链接**（200M 与 50M 各一段代码列表加各自的页面地址）。
 
 本仓库的 GitHub 远端为 `https://github.com/yuzy99/hk-rebound-screener.git`；推送后可在仓库的 **Actions** 页面启用或查看 workflow。定时任务只会使用最新策略配置，扫描产生的结果仍按现有 workflow 规则保存为 Actions artifact。
 

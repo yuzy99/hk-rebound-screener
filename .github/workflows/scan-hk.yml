@@ -16,7 +16,8 @@ on:
         type: boolean
 
 permissions:
-  contents: read
+  # 部署会整体替换站点：港股报告也必须进仓库，才不会被美股那次部署抹掉。
+  contents: write
   pages: write
   id-token: write
 
@@ -38,6 +39,9 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          # git pull --rebase 需要 merge base，浅克隆没有。
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -81,6 +85,27 @@ jobs:
             args+=(--refresh-metadata)
           fi
           python -m hk_rebound_screener.main "${args[@]}"
+
+      - name: Commit published reports
+        continue-on-error: true        # 推送撞车绝不能挡住部署和通知
+        run: |
+          set -uo pipefail
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add reports/
+          git diff --cached --quiet && { echo "报告无变化"; exit 0; }
+          git commit -m "chore(report): publish HK report $(TZ=Asia/Hong_Kong date +%F) [skip ci]"
+          for i in 1 2 3 4 5; do
+            git push origin HEAD:main && exit 0
+            echo "推送被拒，rebase 重试 ($i)"; git pull --rebase origin main || true
+          done
+          echo "WARN: 报告推送失败，本次部署可能不含最新报告"
+
+      - name: Sync reports with main before deploy
+        run: |
+          git fetch origin main
+          git merge --no-edit origin/main || git checkout origin/main -- reports/
+          ls -la reports/
 
       - name: Configure GitHub Pages
         if: success()

@@ -492,6 +492,96 @@ def _compute_industry_benchmark(
     return industry_benchmark, peer_count
 
 
+def _lot_value_setup(
+    result: pd.DataFrame, config: dict[str, Any], market: str
+) -> tuple[str, float]:
+    """算出每手金额列名与该市场的单笔上限，并把每手金额写进 result。
+
+    抽出来是为了让「按档重算 == 原值」在结构上成立：apply_liquidity_tier 和
+    evaluate_signal 走的是同一份代码，而不是两份碰巧一致的表达式。
+    """
+    currency = str(config.get("currency", "HKD" if market == "HK" else "USD")).lower()
+    lot_value_column = f"lot_value_{currency}"
+    result[lot_value_column] = result["close"] * result["lot_size"]
+    if currency == "usd" and "max_lot_value_hkd" in config:
+        usd_hkd_rate = config.get("usd_hkd_rate")
+        if usd_hkd_rate is None or float(usd_hkd_rate) <= 0:
+            raise ValueError("美股策略需要有效的 usd_hkd_rate 才能换算港币 30,000 等值")
+        max_lot_value = float(config["max_lot_value_hkd"]) / float(usd_hkd_rate)
+        result["usd_hkd_rate"] = float(usd_hkd_rate)
+    else:
+        max_lot_value = float(
+            config.get(
+                f"max_lot_value_{currency}",
+                config.get("max_lot_value", 30000.0),
+            )
+        )
+    return lot_value_column, max_lot_value
+
+
+def _common_filters(
+    result: pd.DataFrame,
+    config: dict[str, Any],
+    strategy_mode: str,
+    lot_value_column: str,
+    max_lot_value: float,
+) -> pd.Series:
+    """每手金额、新闻风险、行业三项的公共通过条件，与流动性门槛无关。"""
+    news_clean = result["negative_news_score"] < float(config["negative_news_threshold"])
+    if config.get("strict_news_fetch", True):
+        news_clean &= result["news_fetch_ok"]
+    lot_known = result["lot_size"].notna() & (result["lot_size"] > 0)
+    if config.get("strict_lot_size", True):
+        lot_known &= result[lot_value_column].notna()
+    common_filters = (
+        (result[lot_value_column] <= max_lot_value)
+        & news_clean
+        & lot_known
+    )
+    if strategy_mode != "two_day_drop":
+        industry_known = result["industry"].notna() & result["industry"].astype(str).str.strip().ne("")
+        common_filters &= (
+            (result["peer_count"] >= int(config["min_industry_peers"]))
+            & industry_known
+            & (result["industry_avg_return_pct"] > float(config.get("industry_mean_min_pct", 0.0)))
+        )
+    return common_filters
+
+
+def apply_liquidity_tier(
+    result: pd.DataFrame,
+    config: dict[str, Any],
+    min_prior_median_turnover: float,
+) -> pd.DataFrame:
+    """用另一档流动性门槛重算 liquidity_ok / passes，其余一律照抄。
+
+    刻意只动这两个标志位列，**不重算 score**：score 里的流动性分量以官方
+    liquidity_filter 的对数基准为准，按档重算会让同一只票在两个页面上分数不同，
+    也会让已归档的 CSV 失真（见 strategy.py 里「改门槛和改权重必须一起验证」那段）。
+
+    也刻意**不做 sort_values**：入参已按 score 降序，score 不变就不该重排 ——
+    pandas 默认排序不稳定，重排会打乱并列项，破坏与基准的逐行一致。
+    """
+    frame = result.copy()
+    if str(config.get("strategy_mode", "rebound")).lower() != "two_day_drop":
+        return frame
+    if frame.empty:
+        return frame
+    market = str(config.get("market", "HK")).upper()
+    lot_value_column, max_lot_value = _lot_value_setup(frame, config, market)
+    common_filters = _common_filters(frame, config, "two_day_drop", lot_value_column, max_lot_value)
+    liquidity = config.get("liquidity_filter", {})
+    frame["liquidity_ok"] = (
+        frame["volume"].gt(0)
+        & frame["turnover"].ge(float(liquidity.get("min_current_turnover", 0.0)))
+        & frame["prior_turnover_median"].ge(float(min_prior_median_turnover))
+        & frame["prior_traded_days"].ge(int(liquidity.get("min_traded_days", 0)))
+        & np.isfinite(frame["prior_turnover_median"])
+    )
+    frame["passes"] = common_filters & frame["three_day_drop_ok"] & frame["liquidity_ok"]
+    return frame
+
+
 def evaluate_signal(
     prices: pd.DataFrame,
     universe: pd.DataFrame,
@@ -614,22 +704,7 @@ def evaluate_signal(
     else:
         result["news_fetch_ok"] = True
     result["news_fetch_ok"] = result["news_fetch_ok"].fillna(False).astype(bool)
-    currency = str(config.get("currency", "HKD" if market == "HK" else "USD")).lower()
-    lot_value_column = f"lot_value_{currency}"
-    result[lot_value_column] = result["close"] * result["lot_size"]
-    if currency == "usd" and "max_lot_value_hkd" in config:
-        usd_hkd_rate = config.get("usd_hkd_rate")
-        if usd_hkd_rate is None or float(usd_hkd_rate) <= 0:
-            raise ValueError("美股策略需要有效的 usd_hkd_rate 才能换算港币 30,000 等值")
-        max_lot_value = float(config["max_lot_value_hkd"]) / float(usd_hkd_rate)
-        result["usd_hkd_rate"] = float(usd_hkd_rate)
-    else:
-        max_lot_value = float(
-            config.get(
-                f"max_lot_value_{currency}",
-                config.get("max_lot_value", 30000.0),
-            )
-        )
+    lot_value_column, max_lot_value = _lot_value_setup(result, config, market)
 
     large_drop_max_pct = float(config.get("large_drop_max_pct", config.get("prior_drop_max_pct", -5.0)))
     other_day_max_pct = float(config.get("other_day_return_max_pct", config.get("today_return_max_pct", 0.5)))
@@ -695,24 +770,7 @@ def evaluate_signal(
             - news_risk
         )
 
-    news_clean = result["negative_news_score"] < float(config["negative_news_threshold"])
-    if config.get("strict_news_fetch", True):
-        news_clean &= result["news_fetch_ok"]
-    lot_known = result["lot_size"].notna() & (result["lot_size"] > 0)
-    if config.get("strict_lot_size", True):
-        lot_known &= result[lot_value_column].notna()
-    common_filters = (
-        (result[lot_value_column] <= max_lot_value)
-        & news_clean
-        & lot_known
-    )
-    if strategy_mode != "two_day_drop":
-        industry_known = result["industry"].notna() & result["industry"].astype(str).str.strip().ne("")
-        common_filters &= (
-            (result["peer_count"] >= int(config["min_industry_peers"]))
-            & industry_known
-            & (result["industry_avg_return_pct"] > float(config.get("industry_mean_min_pct", 0.0)))
-        )
+    common_filters = _common_filters(result, config, strategy_mode, lot_value_column, max_lot_value)
     if strategy_mode == "two_day_drop":
         min_current_turnover = float(liquidity.get("min_current_turnover", 0.0))
         min_prior_median_turnover = float(liquidity.get("min_prior_median_turnover", 0.0))
