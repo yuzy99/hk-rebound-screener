@@ -184,7 +184,7 @@
 00220,Beverages—Non-Alcoholic,U-PRESID CHINA
 00222,Insurance—Property & Casualty,MIN XIN HOLD
 00223,Advertising Agencies,ELIFE HLDGS
-00224,,PIONEER GLOBAL
+00224,Real Estate Services,PIONEER GLOBAL
 00225,Real Estate Services,POKFULAM
 00227,Capital Markets,FIRST SHANGHAI
 00228,Oil & Gas Integrated,CHINA ENERGY
@@ -1230,7 +1230,7 @@
 01690,Engineering & Construction,LAP KEI ENGRG
 01691,"Furnishings, Fixtures & Appliances",JS GLOBAL LIFE
 01692,Consumer Electronics,TOWNRAY HLDGS
-01693,,BGMC
+01693,Engineering & Construction,BGMC
 01695,Packaged Foods,S&P INTL HLDG
 01696,Medical Devices,SISRAM MED
 01697,Asset Management,SDITC
@@ -1979,6 +1979,7 @@
 02914,,ALPHA PRO H-20K
 02918,,AI ENERGY E-10K
 02919,,GBA AI COMP-2K
+02920,,BONJOUR HOLD
 02921,,CAPITAL IND FIN
 03200,Specialty Industrial Machinery,HANS CNC
 03223,Semiconductors,INGENIC
@@ -2500,7 +2501,7 @@
 08293,Staffing & Employment Services,SINGASIA HLDG
 08295,Capital Markets,KINGWISOFT TECH
 08296,Personal Services,SINO-LIFE GROUP
-08297,,OCEAN STAR TECH
+08297,Apparel Manufacturing,OCEAN STAR TECH
 08299,Gold,GT GOLD
 08300,Restaurants,JIN MI FANG GP
 08305,Engineering & Construction,ST HLDGS
@@ -2574,7 +2575,7 @@
 08437,,RMH HOLDINGS
 08439,Capital Markets,SOMERLEY CAP
 08445,Engineering & Construction,NOBLE ENG GP
-08446,Rental & Leasing Services,BRIGHTSTAR-NEW
+08446,Rental & Leasing Services,BRIGHTSTAR TECH
 08447,Restaurants,MS CONCEPT
 08448,Specialty Business Services,UNI PRINTSHOP
 08450,Specialty Business Services,EDICO HOLDINGS
@@ -2611,7 +2612,7 @@
 08516,Engineering & Construction,ZY INTL
 08519,Restaurants,XINXIANG ERA
 08521,Textile Manufacturing,WEBX INTL HLDGS
-08525,,BAIYING HOLDING
+08525,Credit Services,BAIYING HOLDING
 08526,Building Products & Equipment,WING FUNG GROUP
 08527,Restaurants,JLOGO HLDGS
 08529,Semiconductors,UBOT HOLDING
@@ -2623,7 +2624,6 @@
 08545,Leisure,AMUSE GROUP
 08547,"Furnishings, Fixtures & Appliances",PACIFIC LEGEND
 08549,Engineering & Construction,GOLDEN LEAF INT
-08577,,BRIGHTSTAR-OLD
 08580,,KPM HOLDING RTS
 08601,Engineering & Construction,BOLTEK
 08606,Information Technology Services,KINETIX SYSTEMS

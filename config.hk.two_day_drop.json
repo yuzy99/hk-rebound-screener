@@ -2,24 +2,30 @@
   "market": "HK",
   "strategy_mode": "two_day_drop",
   "price_adjust": "",
+  "auto_adjust": true,
   "history_days": 120,
   "volume_lookback": 20,
   "news_lookback_hours": 48,
   "max_lot_value_hkd": 30000,
-  "large_drop_max_pct": -5.0,
-  "other_day_return_max_pct": 0.5,
-  "negative_news_threshold": 5.0,
+  "large_drop_max_pct": -4.5,
+  "other_day_return_max_pct": 1.5,
+  "negative_news_threshold": 10.0,
   "strict_lot_size": true,
-  "strict_news_fetch": true,
+  "strict_news_fetch": false,
+  "split_adjust": true,
+  "split_adjust_threshold": 0.6,
   "score_parameters": {
     "drop_cap_pct": 15.0,
+    "drop_weight": 1.0,
     "volume_log_weight": 2.0,
-    "volume_ratio_cap": 8.0
+    "volume_ratio_cap": 8.0,
+    "liquidity_log_weight": 2.5,
+    "liquidity_ratio_cap": 1000.0
   },
   "liquidity_filter": {
-    "min_current_turnover": 3000000,
-    "min_prior_median_turnover": 3000000,
-    "min_traded_days": 15
+    "min_current_turnover": 2000000,
+    "min_prior_median_turnover": 200000000,
+    "min_traded_days": 12
   },
   "score_weights": {
     "drop_strength": 1.0,
@@ -45,7 +51,7 @@
     },
     "suspension_resumption": {
       "weight": 5.0,
-      "terms": ["停牌", "复牌", "suspension", "resumption"]
+      "terms": ["停牌", "suspension", "trading halt"]
     },
     "major_litigation": {
       "weight": 5.0,

@@ -17,6 +17,7 @@ from .adapters import (
     fetch_hkex_security_master,
     fetch_usd_hkd_rate,
     fetch_yfinance_news,
+    fetch_yfinance_splits_bulk,
 )
 from .notifier import (
     format_markdown_report,
@@ -166,6 +167,24 @@ def main() -> None:
 
     if prices.empty:
         raise SystemExit("没有可用价格数据，请检查数据源、代码和日期")
+
+    # 拆股复权必须走权威事件表：yfinance 的 auto_adjust=True 并不真正复权拆股，
+    # 留着断崖会让合股被当成暴跌选进名单、也会让前瞻收益出现 +4173% 这种假数。
+    # 抓取失败时不做复权（而不是退化成按价格跳变猜），宁可少修也不能把真实行情改坏。
+    if bool(config.get("split_adjust", True)):
+        try:
+            split_events = fetch_yfinance_splits_bulk(
+                codes=prices["code"].dropna().unique().tolist(),
+                market=market,
+                start_date=pd.Timestamp(prices["date"].min()).date(),
+                end_date=pd.Timestamp(prices["date"].max()).date(),
+            )
+            config["split_events"] = split_events
+            affected = split_events["code"].nunique() if len(split_events) else 0
+            print(f"拆股事件表: {len(split_events)} 条，涉及 {affected} 只股票")
+        except Exception as error:  # noqa: BLE001 - 复权失败不该中断选股
+            print(f"WARN 拆股事件表抓取失败: {error}; 本轮不做拆股复权")
+
     if strategy_mode == "industry_lag_rebound" and not args.asof and live_asof is not None:
         spot_date = pd.Timestamp(live_asof).normalize()
         completed_dates = sorted(
@@ -245,7 +264,9 @@ def main() -> None:
     )
     forward_days = int(config.get("append_forward_trading_days", 0))
     if forward_days:
-        result = append_forward_observations(result, prices, asof=asof, trading_days=forward_days)
+        result = append_forward_observations(
+            result, prices, asof=asof, trading_days=forward_days, config=config
+        )
     if not fundamentals.empty:
         result = result.merge(fundamentals, on="code", how="left")
     strategy_suffix = "" if strategy_mode == "rebound" else f"_{strategy_mode}"

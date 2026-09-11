@@ -1,12 +1,15 @@
+import math
 from pathlib import Path
 
 import pandas as pd
 import pytest
 
 from hk_rebound_screener.strategy import (
+    _apply_split_adjustment,
     _compute_industry_benchmark,
     append_forward_observations,
     evaluate_signal,
+    find_split_adjustments,
     load_config,
     load_news,
     load_prices,
@@ -64,11 +67,13 @@ def test_two_day_drop_strategy_requires_three_day_pattern_and_liquidity() -> Non
     config = load_config(ROOT / "config.hk.two_day_drop.json")
     dates = pd.bdate_range(end="2026-09-02", periods=24)
     rows = []
+    # 成交额必须越过 min_prior_median_turnover=200,000,000：
+    # 100 HKD x 2,500,000 股 = 250,000,000，其余过滤条件不受影响。
     for code, closes, volume in [
-        ("00001", [100.0] * 21 + [94.0, 92.0, 90.0], 60000.0),
-        ("00002", [100.0] * 21 + [102.0, 104.0, 106.0], 60000.0),
+        ("00001", [100.0] * 21 + [94.0, 92.0, 90.0], 2500000.0),
+        ("00002", [100.0] * 21 + [102.0, 104.0, 106.0], 2500000.0),
         ("00003", [100.0] * 21 + [94.0, 92.0, 90.0], 1.0),
-        ("00004", [100.0] * 21 + [101.0, 103.0, 105.0], 60000.0),
+        ("00004", [100.0] * 21 + [101.0, 103.0, 105.0], 2500000.0),
     ]:
         for date, close in zip(dates, closes):
             rows.append({"date": date, "code": code, "close": close, "volume": volume})
@@ -100,9 +105,12 @@ def test_two_day_drop_strategy_uses_three_trading_day_window() -> None:
     config = load_config(ROOT / "config.hk.two_day_drop.json")
     dates = pd.bdate_range(end="2026-09-02", periods=24)
     specs = [
-        ("00001", [100.0] * 21 + [94.0, 94.376, 94.752], 60000.0),
-        ("00002", [100.0] * 21 + [94.0, 94.564, 94.942], 60000.0),
-        ("00003", [100.0] * 21 + [96.0, 96.384, 96.769], 60000.0),
+        # 大跌后两日小幅上行（+0.4%/+0.4%），仍在 other_day_return_max_pct=1.5% 之内
+        ("00001", [100.0] * 21 + [94.0, 94.376, 94.752], 2500000.0),
+        # 大跌后次日反弹 +2.13%，超过 1.5% 上限，必须被剔除
+        ("00002", [100.0] * 21 + [94.0, 96.0, 96.2], 2500000.0),
+        # 三日最大跌幅仅 -4%，未触及 large_drop_max_pct=-4.5%
+        ("00003", [100.0] * 21 + [96.0, 96.384, 96.769], 2500000.0),
     ]
     rows = [
         {"date": date, "code": code, "close": close, "volume": volume}
@@ -147,7 +155,7 @@ def test_two_day_drop_score_caps_drop_and_log_scales_volume() -> None:
                 "date": date,
                 "code": code,
                 "close": close,
-                "volume": 40000.0 if date != dates[-1] else 40000.0 * ratio,
+                "volume": 8000000.0 if date != dates[-1] else 8000000.0 * ratio,
             }
             for code, ratio in zip(codes, volume_ratios)
             for date, close in zip(dates, [100.0] * 21 + [80.0, 79.0, 78.21])
@@ -167,10 +175,17 @@ def test_two_day_drop_score_caps_drop_and_log_scales_volume() -> None:
     result = evaluate_signal(prices, universe, news, config, asof="2026-09-02")
 
     scores = result.set_index("code")["score"]
-    assert scores["00001"] == pytest.approx(15.0)
-    assert scores["00002"] == pytest.approx(17.0)
-    assert scores["00003"] == pytest.approx(19.0)
-    assert scores["00004"] == pytest.approx(21.0)
+    # 流动性分量：20 日中位成交额 = 100 × 8,000,000 = 800,000,000，门槛 200,000,000，
+    # 倍数 4 → 2.5 × log₁₀(4)。该分量对所有标的相同，用于打破同分。
+    liquidity_component = 2.5 * math.log10(4.0)
+    # 跌幅项权重为 +1.0：跌得越深分数越高。四只票收盘价相同，三日最大跌幅
+    # 都是 -20%，被 drop_cap_pct=15 截断，所以跌幅项一律取到上限 15.0。
+    # 量比 1/2/4/8 经 log₂(封顶 8) 得到 0/1/2/3，再乘 volume_log_weight=2.0
+    # 即 0/2.0/4.0/6.0。——这一项要显式写出来，不要再折进跌幅项里，
+    # 否则改权重时很容易算重（旧版本就把它写成了 -13/-11/-9）。
+    volume_components = [0.0, 2.0, 4.0, 6.0]
+    for code, volume_component in zip(codes, volume_components):
+        assert scores[code] == pytest.approx(15.0 + volume_component + liquidity_component)
     assert result["passes"].all()
 
 
@@ -179,7 +194,7 @@ def test_negative_news_score_deduplicates_repeated_risk_categories() -> None:
     dates = pd.bdate_range(end="2026-09-02", periods=24)
     prices = pd.DataFrame(
         [
-            {"date": date, "code": "00001", "close": close, "volume": 40000.0}
+            {"date": date, "code": "00001", "close": close, "volume": 2500000.0}
             for date, close in zip(dates, [100.0] * 21 + [94.0, 92.0, 90.0])
         ]
     )
@@ -217,9 +232,102 @@ def test_negative_news_score_deduplicates_repeated_risk_categories() -> None:
     result = evaluate_signal(prices, universe, news, config, asof="2026-09-02")
 
     row = result.iloc[0]
+    # 同一风险类别重复报道只计一次分
     assert row["negative_news_score"] == pytest.approx(5.0)
     assert row["negative_news_hits"] == "major_litigation"
+    # 单类命中只扣分，不再一票否决
+    assert bool(row["passes"])
+
+
+def test_negative_news_excludes_when_risk_categories_accumulate() -> None:
+    """累计风险分达到 negative_news_threshold（10 分）才淘汰：两类不同风险即可触发。"""
+    config = load_config(ROOT / "config.hk.two_day_drop.json")
+    dates = pd.bdate_range(end="2026-09-02", periods=24)
+    prices = pd.DataFrame(
+        [
+            {"date": date, "code": "00001", "close": close, "volume": 2500000.0}
+            for date, close in zip(dates, [100.0] * 21 + [94.0, 92.0, 90.0])
+        ]
+    )
+    universe = pd.DataFrame(
+        {
+            "code": ["00001"],
+            "name": ["TwoCategories"],
+            "industry": ["Tech"],
+            "lot_size": [100.0],
+            "enabled": [True],
+        }
+    )
+    news = pd.DataFrame(
+        [
+            {
+                "code": "00001",
+                "published_at": "2026-09-02T09:00:00+08:00",
+                "title": "重大诉讼公告",
+                "body": "公司涉及重大诉讼",
+                "url": "https://example.invalid/1",
+            },
+            {
+                "code": "00001",
+                "published_at": "2026-09-02T10:00:00+08:00",
+                "title": "盈利预警公告",
+                "body": "预计本期由盈转亏",
+                "url": "https://example.invalid/2",
+            },
+        ]
+    )
+    news["published_at"] = pd.to_datetime(news["published_at"]).dt.tz_convert(
+        "Asia/Hong_Kong"
+    ).dt.tz_localize(None)
+
+    result = evaluate_signal(prices, universe, news, config, asof="2026-09-02")
+
+    row = result.iloc[0]
+    assert row["negative_news_score"] == pytest.approx(10.0)
+    assert row["negative_news_hits"] == "major_litigation;profit_warning"
     assert not bool(row["passes"])
+
+
+def test_news_terms_do_not_match_inside_longer_words() -> None:
+    """ASCII 关键词带词边界：replacement 不应命中 placement（配股）。"""
+    config = load_config(ROOT / "config.hk.two_day_drop.json")
+    dates = pd.bdate_range(end="2026-09-02", periods=24)
+    prices = pd.DataFrame(
+        [
+            {"date": date, "code": "00001", "close": close, "volume": 2500000.0}
+            for date, close in zip(dates, [100.0] * 21 + [94.0, 92.0, 90.0])
+        ]
+    )
+    universe = pd.DataFrame(
+        {
+            "code": ["00001"],
+            "name": ["Replacement"],
+            "industry": ["Tech"],
+            "lot_size": [100.0],
+            "enabled": [True],
+        }
+    )
+    news = pd.DataFrame(
+        [
+            {
+                "code": "00001",
+                "published_at": "2026-09-02T09:00:00+08:00",
+                "title": "Company announces replacement of chief financial officer",
+                "body": "The board appointed a replacement director.",
+                "url": "https://example.invalid/1",
+            }
+        ]
+    )
+    news["published_at"] = pd.to_datetime(news["published_at"]).dt.tz_convert(
+        "Asia/Hong_Kong"
+    ).dt.tz_localize(None)
+
+    result = evaluate_signal(prices, universe, news, config, asof="2026-09-02")
+
+    row = result.iloc[0]
+    assert row["negative_news_score"] == pytest.approx(0.0)
+    assert row["negative_news_hits"] == ""
+    assert bool(row["passes"])
 
 
 def test_two_day_drop_strategy_does_not_require_industry_filters() -> None:
@@ -227,7 +335,7 @@ def test_two_day_drop_strategy_does_not_require_industry_filters() -> None:
     dates = pd.bdate_range(end="2026-09-02", periods=24)
     prices = pd.DataFrame(
         [
-            {"date": date, "code": "00001", "close": close, "volume": 60000.0}
+            {"date": date, "code": "00001", "close": close, "volume": 2500000.0}
             for date, close in zip(dates, [100.0] * 21 + [94.0, 92.0, 90.0])
         ]
     )
@@ -254,12 +362,12 @@ def test_two_day_drop_strategy_filters_out_intermittent_trading_days() -> None:
     config = load_config(ROOT / "config.hk.two_day_drop.json")
     dates = pd.bdate_range(end="2026-09-02", periods=24)
     rows = []
-    # 00001: 正常交易股票，全周期 24 天均有成交（每天 60000 股）
+    # 00001: 正常交易股票，全周期 24 天均有成交
     # 00002 & 00004: 同行基准股票
     for code, closes, volume in [
-        ("00001", [100.0] * 21 + [94.0, 92.0, 90.0], 60000.0),
-        ("00002", [100.0] * 21 + [102.0, 104.0, 106.0], 60000.0),
-        ("00004", [100.0] * 21 + [101.0, 103.0, 105.0], 60000.0),
+        ("00001", [100.0] * 21 + [94.0, 92.0, 90.0], 2500000.0),
+        ("00002", [100.0] * 21 + [102.0, 104.0, 106.0], 2500000.0),
+        ("00004", [100.0] * 21 + [101.0, 103.0, 105.0], 2500000.0),
     ]:
         for date, close in zip(dates, closes):
             rows.append({"date": date, "code": code, "close": close, "volume": volume})
@@ -323,6 +431,183 @@ def test_zero_prior_volume_does_not_crash_strategy() -> None:
 
     assert pd.isna(result.iloc[0]["volume_ratio"])
     assert not bool(result.iloc[0]["liquidity_ok"])
+
+
+# 断崖出现在 104 -> 52（2026-01-02 那天），所以拆股事件日就是 2026-01-02。
+SPLIT_FRAME_DATES = ["2025-12-29", "2025-12-30", "2025-12-31", "2026-01-02", "2026-01-05"]
+
+
+def _split_frame() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "code": ["X"] * 5,
+            "date": pd.to_datetime(SPLIT_FRAME_DATES),
+            "open": [100.0, 102.0, 104.0, 52.0, 53.0],
+            "close": [100.0, 102.0, 104.0, 52.0, 53.0],
+            "volume": [1000.0] * 5,
+        }
+    )
+
+
+def test_split_adjustment_aligns_prices_and_preserves_turnover() -> None:
+    """2:1 拆股：事件日之前的价格减半对齐，成交量同步放大以保持成交额不变。"""
+    frame = _split_frame()
+    events = pd.DataFrame(
+        {"date": pd.to_datetime(["2026-01-02"]), "code": ["X"], "ratio": [2.0]}
+    )
+
+    adjusted = _apply_split_adjustment(frame, events)
+
+    assert adjusted["close"].tolist() == [50.0, 51.0, 52.0, 52.0, 53.0]
+    # 成交量按同一因子反向缩放，于是 close * volume 还原真实成交额
+    assert adjusted["volume"].tolist() == [2000.0, 2000.0, 2000.0, 1000.0, 1000.0]
+    pd.testing.assert_series_equal(
+        (frame["close"] * frame["volume"]).rename("turnover"),
+        (adjusted["close"] * adjusted["volume"]).rename("turnover"),
+    )
+
+
+def test_split_adjustment_removes_reverse_split_cliff() -> None:
+    """1 并 40（ratio=0.025）：价格按 40 倍对齐后，单日断崖消失。"""
+    frame = pd.DataFrame(
+        {
+            "code": ["A"] * 4,
+            "date": pd.bdate_range(end="2026-01-19", periods=4),
+            "close": [0.08, 0.078, 3.20, 3.10],
+            "volume": [5e6] * 4,
+        }
+    )
+    events = pd.DataFrame(
+        {"date": pd.to_datetime(["2026-01-16"]), "code": ["A"], "ratio": [0.025]}
+    )
+
+    adjusted = _apply_split_adjustment(frame, events)
+
+    assert adjusted["close"].tolist() == pytest.approx([3.2, 3.12, 3.20, 3.10])
+    assert adjusted["close"].pct_change().abs().max() < 0.05
+
+
+def test_split_adjustment_does_not_touch_real_crashes() -> None:
+    """关键回归：没有拆股事件的真实腰斩必须原样保留。
+
+    这正是价格跳变阈值法的致命伤 —— 港股仙股一天翻倍是真行情
+    （实测 00117 连跳三次却没有任何拆股事件），按阈值猜就会把真实行情
+    改成假暴跌，反过来把真合股漏掉。复权只认权威事件表。
+    """
+    frame = pd.DataFrame(
+        {
+            "code": ["B"] * 4,
+            "date": pd.bdate_range(end="2026-01-15", periods=4),
+            "close": [10.0, 10.1, 5.0, 4.9],
+            "volume": [1e5] * 4,
+        }
+    )
+
+    assert _apply_split_adjustment(frame, None).equals(frame)
+    assert _apply_split_adjustment(
+        frame, pd.DataFrame(columns=["date", "code", "ratio"])
+    ).equals(frame)
+    # 事件表存在但不含该代码时同样不动
+    other = pd.DataFrame(
+        {"date": pd.to_datetime(["2026-01-15"]), "code": ["ZZZ"], "ratio": [0.1]}
+    )
+    assert _apply_split_adjustment(frame, other).equals(frame)
+
+
+def test_split_adjustment_compounds_multiple_events() -> None:
+    """同一只票连续两次拆股，比例必须连乘。"""
+    frame = pd.DataFrame(
+        {
+            "code": ["M"] * 4,
+            # 断崖在 12-30 与 12-31 两天，事件日即这两天
+            "date": pd.to_datetime(["2025-12-29", "2025-12-30", "2025-12-31", "2026-01-02"]),
+            "close": [100.0, 50.0, 25.0, 25.0],
+        }
+    )
+    events = pd.DataFrame(
+        {
+            "date": pd.to_datetime(["2025-12-30", "2025-12-31"]),
+            "code": ["M", "M"],
+            "ratio": [2.0, 2.0],
+        }
+    )
+
+    assert _apply_split_adjustment(frame, events)["close"].tolist() == [25.0] * 4
+
+
+def test_prepare_prices_applies_split_events_from_config() -> None:
+    """_prepare_prices 必须在算 turnover 之前复权，否则成交额会被拆股因子污染。"""
+    from hk_rebound_screener.strategy import _prepare_prices
+
+    frame = _split_frame()
+    config = {
+        "split_adjust": True,
+        "split_events": pd.DataFrame(
+            {"date": pd.to_datetime(["2026-01-02"]), "code": ["X"], "ratio": [2.0]}
+        ),
+    }
+    prepared = _prepare_prices(frame, config)
+    # 复权后每日涨跌幅连续，不再出现 -50% 的假暴跌
+    assert prepared["daily_return_pct"].abs().max() < 5.0
+
+    off = _prepare_prices(frame, {"split_adjust": False})
+    assert off["close"].tolist() == frame["close"].tolist()
+
+
+def test_forward_observations_respect_split_events() -> None:
+    """前瞻收益必须走复权后的价格，否则跨拆股会出现根本不可能成交的假收益。"""
+    frame = pd.DataFrame(
+        {
+            "code": ["X"] * 3,
+            "date": pd.to_datetime(["2026-01-02", "2026-01-05", "2026-01-06"]),
+            "close": [10.0, 10.2, 5.1],
+            "volume": [1000.0] * 3,
+        }
+    )
+    result = pd.DataFrame({"code": ["X"], "passes": [True]})
+    events = pd.DataFrame(
+        {"date": pd.to_datetime(["2026-01-06"]), "code": ["X"], "ratio": [2.0]}
+    )
+
+    without = append_forward_observations(result, frame, asof="2026-01-02", trading_days=2)
+    assert without.iloc[0]["forward_t1_close"] == pytest.approx(10.2)
+    assert without.iloc[0]["forward_t2_return_pct"] == pytest.approx(-50.0)
+
+    with_events = append_forward_observations(
+        result,
+        frame,
+        asof="2026-01-02",
+        trading_days=2,
+        config={"split_adjust": True, "split_events": events},
+    )
+    # 复权把 01-05 的价格也折算到拆股后的价位体系，-50% 的假跌消失
+    assert with_events.iloc[0]["forward_t1_close"] == pytest.approx(5.1)
+    assert with_events.iloc[0]["forward_t2_return_pct"] == pytest.approx(0.0, abs=0.01)
+
+
+def test_find_split_adjustments_flags_suspicious_jumps_for_audit() -> None:
+    """阈值检测只用于审计，且默认阈值刻意放过 2:1 —— 真实腰斩与之无法区分。
+
+    这正是当初不能用阈值自动复权的原因：港股仙股 0.043 -> 0.081 这种
+    「2 倍」既可能是合股也可能是真行情，猜错就把真实行情改成了假暴跌。
+    """
+    frame = pd.DataFrame(
+        {
+            "code": ["X"] * 5 + ["Y"] * 4,
+            "date": list(pd.to_datetime(SPLIT_FRAME_DATES))
+            + list(pd.to_datetime(["2026-01-12", "2026-01-13", "2026-01-14", "2026-01-15"])),
+            # X: 104 -> 52（恰好 2:1）；Y: 10.1 -> 5.0（真实腰斩）
+            "close": [100.0, 102.0, 104.0, 52.0, 53.0, 10.0, 10.1, 5.0, 4.9],
+        }
+    )
+
+    # 默认阈值 0.6：两者都是 0.5 倍的跳变，一律不报
+    assert find_split_adjustments(frame, threshold=0.6).empty
+
+    # 放宽到 0.4 才会报出来，且只作为审计线索
+    flagged = find_split_adjustments(frame, threshold=0.4)
+    assert flagged["code"].tolist() == ["X", "Y"]
+    assert flagged["ratio"].tolist() == pytest.approx([0.5, 5.0 / 10.1])
 
 
 def test_notifier_markdown_report_and_step_summary(tmp_path: Path, monkeypatch) -> None:

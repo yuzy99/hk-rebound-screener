@@ -484,6 +484,168 @@ def fetch_yfinance_history_bulk(
     ].sort_values(["code", "date"]).reset_index(drop=True)
 
 
+def fetch_yfinance_splits_bulk(
+    codes: list[str],
+    market: str,
+    start_date: date,
+    end_date: date,
+    chunk_size: int = YFINANCE_BATCH_SIZE,
+    refresh: bool = False,
+) -> pd.DataFrame:
+    """批量抓取权威拆股事件（Yahoo 的 Stock Splits）。
+
+    为什么必须走这张表、而不是靠价格跳变阈值去猜：yfinance 的 auto_adjust=True
+    并不会真正复权拆股（实测 ASBP 1 并 40 后单日仍留 +2883% 断崖），而港股仙股
+    一天翻倍是家常便饭（实测 00117 连跳三次却没有任何拆股事件）。用阈值猜，
+    既会把真实行情改成假暴跌，又抓不到真正的合股（实测 00022 的 0.02 事件）。
+
+    返回列为 date / code / ratio 的事件表；ratio 是 yfinance 口径的
+    「1 旧股换多少新股」，< 1 为合股、> 1 为拆股。
+    已检查过且无拆股的代码记在 {market}_splits_checked.csv，避免每次全量重抓。
+    """
+    import yfinance as yf
+
+    columns = ["date", "code", "ratio"]
+    empty = pd.DataFrame(columns=columns)
+    code_map = {_yahoo_symbol(code, market): normalize_code(code) for code in codes}
+    if not code_map:
+        return empty
+
+    YFINANCE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    cache_file = YFINANCE_CACHE_DIR / f"{market.lower()}_splits.csv"
+    checked_file = YFINANCE_CACHE_DIR / f"{market.lower()}_splits_checked.csv"
+    cutoff = pd.Timestamp(end_date)
+
+    def read_cache(path: Path, required: list[str]) -> pd.DataFrame:
+        if not path.exists():
+            return pd.DataFrame(columns=required)
+        frame = pd.read_csv(path, dtype={"code": str})
+        missing = set(required).difference(frame.columns)
+        if missing:
+            raise ValueError(f"缺少字段: {sorted(missing)}")
+        return frame[required].copy()
+
+    try:
+        cached = read_cache(cache_file, columns)
+        cached["date"] = pd.to_datetime(cached["date"], errors="coerce").dt.normalize()
+        cached["code"] = cached["code"].map(normalize_code)
+        cached["ratio"] = pd.to_numeric(cached["ratio"], errors="coerce")
+        cached = cached.dropna(subset=["date", "code", "ratio"])
+    except Exception as error:
+        print(f"WARN yfinance splits cache {cache_file}: {error}; 重新抓取", flush=True)
+        cached = empty.copy()
+
+    checked: dict[str, pd.Timestamp] = {}
+    if not refresh:
+        try:
+            registry = read_cache(checked_file, ["code", "checked_until"])
+            registry["checked_until"] = pd.to_datetime(
+                registry["checked_until"], errors="coerce"
+            ).dt.normalize()
+            registry = registry.dropna(subset=["checked_until"])
+            checked = dict(zip(registry["code"], registry["checked_until"]))
+        except Exception as error:
+            print(f"WARN yfinance splits registry {checked_file}: {error}; 全量重抓", flush=True)
+            checked = {}
+
+    pending = {
+        symbol: code
+        for symbol, code in code_map.items()
+        if checked.get(code) is None or checked[code] < cutoff
+    }
+    if not pending:
+        return cached.loc[
+            cached["code"].isin(set(code_map.values()))
+            & cached["date"].ge(pd.Timestamp(start_date))
+            & cached["date"].le(cutoff)
+        ].reset_index(drop=True)
+
+    symbols = list(pending)
+    print(
+        f"yfinance 抓取拆股事件: {len(symbols)}/{len(code_map)} 个标的"
+        f"（其余 {len(code_map) - len(symbols)} 个已检查过且无新事件）",
+        flush=True,
+    )
+
+    rows: list[pd.DataFrame] = []
+    failed: list[str] = []
+    for start in range(0, len(symbols), chunk_size):
+        chunk = symbols[start : start + chunk_size]
+        try:
+            payload = yf.download(
+                tickers=chunk,
+                start=start_date,
+                end=end_date + timedelta(days=1),
+                auto_adjust=False,
+                actions=True,
+                progress=False,
+                group_by="ticker",
+                threads=True,
+            )
+        except Exception as error:  # 单批失败不该拖垮整轮
+            print(f"WARN yfinance splits batch {start}: {error}", flush=True)
+            failed.extend(chunk)
+            continue
+
+        if payload is None or payload.empty:
+            failed.extend(chunk)
+            continue
+
+        for symbol in chunk:
+            try:
+                block = payload[symbol] if symbol in payload.columns.get_level_values(0) else None
+            except Exception:
+                block = None
+            if block is None or "Stock Splits" not in getattr(block, "columns", []):
+                failed.append(symbol)
+                continue
+            events = pd.to_numeric(block["Stock Splits"], errors="coerce").dropna()
+            events = events[events.gt(0.0)]
+            if events.empty:
+                continue
+            rows.append(
+                pd.DataFrame(
+                    {
+                        "date": pd.to_datetime(events.index).tz_localize(None).normalize(),
+                        "code": pending[symbol],
+                        "ratio": events.to_numpy(dtype=float),
+                    }
+                )
+            )
+
+    if failed:
+        print(f"WARN yfinance splits 未返回 ({len(failed)}): {','.join(failed[:10])}", flush=True)
+
+    fresh = pd.concat(rows, ignore_index=True) if rows else empty.copy()
+    combined = pd.concat([cached, fresh], ignore_index=True)
+    combined = combined.drop_duplicates(["date", "code"], keep="last").sort_values(
+        ["code", "date"]
+    )
+    try:
+        combined.to_csv(cache_file, index=False)
+        # 只有真正返回了数据的标的才算「已检查」，失败的下一轮会重试。
+        succeeded = [symbol for symbol in symbols if symbol not in set(failed)]
+        registry = pd.DataFrame(
+            {
+                "code": [pending[symbol] for symbol in succeeded],
+                "checked_until": cutoff,
+            }
+        )
+        registry = pd.concat([pd.DataFrame(list(checked.items()), columns=["code", "checked_until"]), registry],
+                             ignore_index=True)
+        registry["code"] = registry["code"].map(normalize_code)
+        registry = registry.drop_duplicates("code", keep="last").sort_values("code")
+        registry.to_csv(checked_file, index=False)
+    except Exception as error:
+        print(f"WARN yfinance splits cache write {cache_file}: {error}", flush=True)
+
+    return combined.loc[
+        combined["code"].isin(set(code_map.values()))
+        & combined["date"].ge(pd.Timestamp(start_date))
+        & combined["date"].le(cutoff)
+    ].reset_index(drop=True)
+
+
 def build_full_market_prices(
     codes: list[str],
     market: str,

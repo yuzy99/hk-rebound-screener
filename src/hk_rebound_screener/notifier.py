@@ -260,8 +260,27 @@ def format_markdown_report(
     currency = "USD" if market_upper == "US" else "HKD"
     score_parameters = config.get("score_parameters", {})
     drop_cap_pct = float(score_parameters.get("drop_cap_pct", 15.0))
+    drop_weight = float(score_parameters.get("drop_weight", 1.0))
     volume_log_weight = float(score_parameters.get("volume_log_weight", 2.0))
     volume_ratio_cap = float(score_parameters.get("volume_ratio_cap", 8.0))
+    liquidity_log_weight = float(score_parameters.get("liquidity_log_weight", 0.0))
+    liquidity_ratio_cap = float(score_parameters.get("liquidity_ratio_cap", 100.0))
+    # 权重为 ±1 时省略系数，比 "1 × min(D, 15)" / "-1 × min(D, 15)" 好读。
+    if drop_weight == 1.0:
+        drop_term = f"min(D, {drop_cap_pct:g})"
+    elif drop_weight == -1.0:
+        drop_term = f"− min(D, {drop_cap_pct:g})"
+    else:
+        drop_term = f"{drop_weight:g} × min(D, {drop_cap_pct:g})"
+    score_formula = (
+        f"S = {drop_term}"
+        f" + {volume_log_weight:g} × log₂(min(max(R, 1), {volume_ratio_cap:g}))"
+    )
+    if liquidity_log_weight > 0:
+        score_formula += (
+            f" + {liquidity_log_weight:g} × log₁₀(min(max(L, 1), {liquidity_ratio_cap:g}))"
+        )
+    score_formula += " − N"
 
     passed = result.loc[result["passes"]].copy() if not result.empty and "passes" in result.columns else pd.DataFrame()
 
@@ -295,19 +314,48 @@ def format_markdown_report(
             "",
         ])
     elif strategy_mode == "two_day_drop":
+        large_drop_text = f"{abs(float(config.get('large_drop_max_pct', -5.0))):g}"
+        other_day_text = f"{float(config.get('other_day_return_max_pct', 0.5)):g}"
+        liquidity_config = config.get("liquidity_filter", {})
+        news_threshold = float(config.get("negative_news_threshold", 5.0))
+        drop_definition = f"`D` 为最近三日最大跌幅绝对值（百分点，最高 {drop_cap_pct:g} 分）"
+        if drop_weight < 0:
+            drop_definition += "；该项权重为负，跌得越深扣分越多"
+        elif drop_weight > 0:
+            drop_definition += "；该项权重为正，跌得越深得分越高"
+        definition_parts = [
+            drop_definition,
+            f"`R` 为有效量比（1 倍以下不加分，{volume_ratio_cap:g} 倍封顶）",
+        ]
+        if liquidity_log_weight > 0:
+            definition_parts.append(
+                f"`L` 为 20 日中位成交额相对流动性门槛的倍数（1 倍以下不加分，{liquidity_ratio_cap:g} 倍封顶）"
+            )
+        definition_parts.append(
+            f"`N` 为 48 小时内按风险类别去重后的新闻风险分（累计到 {news_threshold:g} 分才淘汰，未达则仅扣分）"
+        )
         lines.extend([
-            "- **三日筛选规则**：最近三个交易日中至少一日跌幅 ≤ −5%，其余两日涨跌幅均 ≤ +0.5%",
-            f"- **评分公式**：`S = min(D, {drop_cap_pct:g}) + {volume_log_weight:g} × log₂(min(max(R, 1), {volume_ratio_cap:g})) − N`",
-            f"- **评分定义**：`D` 为最近三日最大跌幅绝对值（百分点，最高 {drop_cap_pct:g} 分）；`R` 为有效量比（1 倍以下不加分，{volume_ratio_cap:g} 倍封顶）；`N` 为 48 小时内按风险类别去重后的新闻风险分。",
+            f"- **三日筛选规则**：最近三个交易日中至少一日跌幅 ≤ −{large_drop_text}%，其余两日涨跌幅均 ≤ +{other_day_text}%",
+            (
+                "- **流动性门槛**：今日成交额 ≥ "
+                f"{_format_turnover(liquidity_config.get('min_current_turnover', 0.0), currency)}"
+                "，过去 20 日中位成交额 ≥ "
+                f"{_format_turnover(liquidity_config.get('min_prior_median_turnover', 0.0), currency)}"
+                f"，有效成交天数 ≥ {int(liquidity_config.get('min_traded_days', 0))} 天"
+            ),
+            f"- **新闻门槛**：风险分 < {news_threshold:g} 分即保留（单类命中只扣分，不再一票否决）",
+            f"- **评分公式**：`{score_formula}`",
+            "- **评分定义**：" + "；".join(definition_parts) + "。",
             "",
         ])
 
     if passed.empty:
-        empty_note = (
-            "今日扫描完毕，**未发现**同时满足昨日大跌、今日行业回暖及个股滞涨条件的标的。"
-            if strategy_mode == "industry_lag_rebound"
-            else "今日扫描完毕，**未发现**同时满足跌幅、流动性及无负面新闻条件的标的。"
-        )
+        if strategy_mode == "industry_lag_rebound":
+            empty_note = "今日扫描完毕，**未发现**同时满足昨日大跌、今日行业回暖及个股滞涨条件的标的。"
+        elif strategy_mode == "two_day_drop":
+            empty_note = "今日扫描完毕，**未发现**同时满足三日跌幅、流动性及新闻风险条件的标的。"
+        else:
+            empty_note = "今日扫描完毕，**未发现**同时满足跌幅、流动性及新闻风险条件的标的。"
         lines.extend([
             "> [!NOTE]",
             f"> {empty_note}",
@@ -397,11 +445,23 @@ def format_markdown_report(
         )
 
         if strategy_mode == "two_day_drop":
+            news_fetch_value = row.get("news_fetch_ok", True)
+            news_verified = bool(news_fetch_value) if pd.notna(news_fetch_value) else False
+            hits_value = row.get("negative_news_hits")
+            news_hits = str(hits_value).strip() if pd.notna(hits_value) else ""
+            if news_verified:
+                news_line = (
+                    f"> 🔍 **新闻核实**：✅ 已核实"
+                    + (f"，命中风险类别 `{news_hits}`" if news_hits else "，48 小时内无风险关键词")
+                )
+            else:
+                news_line = "> 🔍 **新闻核实**：⚠️ 未核实（舆情源抓取失败，请自行核对交易所公告）"
             detail_lines = [
                 f"> 🏢 **所属行业**：{industry}",
                 f"> 📉 **三日信号**：**T-2** `{two_days_ago_ret}` ｜ **T-1** `{prior_ret}` ｜ **T** `{daily_ret}` ｜ **最大跌幅** `{drop_strength}`",
                 f"> 💵 **成交活跃度**：今日成交额 `{turnover}` ｜ 20 日中位数 `{prior_turnover}` ｜ 基准比 `{turnover_ratio}`",
                 f"> 📈 **量能**：今日成交量 `{volume}` ｜ 近 20 日中位数的 `{vol_ratio}`",
+                news_line,
                 f"> ⭐ **综合评分**：**{score}**",
             ]
         else:

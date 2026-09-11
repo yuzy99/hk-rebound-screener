@@ -130,10 +130,10 @@
         <span class="rounded-md bg-zinc-100 px-2 py-1 text-[9px] font-extrabold tracking-widest text-zinc-500">待回测参数</span>
       </div>
       <div class="mt-3 overflow-x-auto rounded-xl bg-zinc-950 px-3 py-3 font-mono text-[12px] font-bold leading-relaxed text-white">
-        S = min(D, 15) + 2 × log₂(min(max(R, 1), 8)) − N
+        S = min(D, 15) + 2 × log₂(min(max(R, 1), 8)) + 2.5 × log₁₀(min(max(L, 1), 1000)) − N
       </div>
       <p class="mt-3 text-[11px] font-medium leading-relaxed text-zinc-500">
-        D 为最近三日最大跌幅绝对值（百分点，最高 15 分）；R 为有效量比，1 倍以下不加分、8 倍封顶；N 为近 48 小时按风险类别去重后的新闻风险分。
+        D 为最近三日最大跌幅绝对值（百分点，最高 15 分；该项权重为正，跌得越深得分越高）；R 为有效量比，1 倍以下不加分、8 倍封顶；L 为 20 日中位成交额相对流动性门槛的倍数，1 倍以下不加分、1000 倍封顶；N 为近 48 小时按风险类别去重后的新闻风险分。
       </p>
     </section>
 

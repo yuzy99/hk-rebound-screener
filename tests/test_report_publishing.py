@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 import pandas as pd
@@ -60,7 +61,12 @@ def test_current_score_formula_is_in_markdown_and_html_report(tmp_path: Path) ->
         asof="2026-09-10",
         config=config,
     )
-    assert "S = min(D, 15) + 2 × log₂(min(max(R, 1), 8)) − N" in report
+    # drop_weight = +1.0：跌幅是正向因子，跌得越深得分越高，不留负号
+    expected_formula = (
+        "S = min(D, 15) + 2 × log₂(min(max(R, 1), 8))"
+        " + 2.5 × log₁₀(min(max(L, 1), 1000)) − N"
+    )
+    assert expected_formula in report
     assert "按风险类别去重" in report
 
     output_path = tmp_path / "hk_latest.html"
@@ -73,7 +79,20 @@ def test_current_score_formula_is_in_markdown_and_html_report(tmp_path: Path) ->
     )
     html = output_path.read_text(encoding="utf-8")
     assert "当前评分公式" in html
-    assert "S = min(D, 15) + 2 × log₂(min(max(R, 1), 8)) − N" in html
+    assert expected_formula in html
+
+    # 模板里的「当前评分公式」是写死的一块，必须和配置推导出的公式一致。
+    # 上面那行断言会撞上内嵌的 markdown 原文而恒真，所以这里先把 raw-data 挖掉，
+    # 只检查用户真正看到的那部分。
+    visible = re.sub(
+        r'<script type="text/markdown" id="raw-data">.*?</script>',
+        "",
+        html,
+        flags=re.S,
+    )
+    assert visible != html, "raw-data 未被挖掉，下面的断言会失去意义"
+    assert expected_formula in visible
+    assert "1000 倍封顶" in visible
 
 
 def test_html_template_parses_backtick_quoted_tickers() -> None:

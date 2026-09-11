@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -9,6 +10,11 @@ import pandas as pd
 
 
 CODE_WIDTH = 5
+
+# 拆股复权阈值：单日跳变超过该比例才当作拆股/合股。
+# 刻意定在 0.5 以上 —— 2:1 拆股与真实腰斩在数值上无法区分，
+# 宁可漏掉小比例拆股，也不能把真实暴跌误判成拆股而从名单里抹掉。
+DEFAULT_SPLIT_ADJUST_THRESHOLD = 0.6
 
 
 def normalize_code(value: object) -> str:
@@ -121,25 +127,52 @@ def _asof_date(asof: object, market: str) -> pd.Timestamp:
     return stamp.normalize()
 
 
+def _compile_news_patterns(
+    config: dict[str, Any],
+) -> list[tuple[str, float, list[re.Pattern[str]]]]:
+    """Compile every risk category's terms once, up front.
+
+    ASCII terms get alphanumeric-boundary guards so that a short English term
+    no longer fires inside a longer word ("placement" inside "replacement").
+    CJK terms stay plain substrings because Chinese has no word boundaries to
+    anchor on.
+    """
+    compiled: list[tuple[str, float, list[re.Pattern[str]]]] = []
+    for category, rule in config.get("news_rules", {}).items():
+        patterns: list[re.Pattern[str]] = []
+        for raw_term in rule.get("terms", []):
+            term = str(raw_term).strip().lower()
+            if not term:
+                continue
+            escaped = re.escape(term)
+            if term.isascii():
+                patterns.append(re.compile(rf"(?<![A-Za-z0-9]){escaped}(?![A-Za-z0-9])"))
+            else:
+                patterns.append(re.compile(escaped))
+        compiled.append((category, float(rule.get("weight", 0.0)), patterns))
+    return compiled
+
+
 def _news_scores(news: pd.DataFrame, asof: object, config: dict[str, Any]) -> pd.DataFrame:
     if news.empty:
         return pd.DataFrame(columns=["code", "negative_news_score", "negative_news_hits"])
     end = _asof_end(asof)
     start = end - pd.Timedelta(hours=float(config["news_lookback_hours"]))
     window = news.loc[(news["published_at"] >= start) & (news["published_at"] <= end)].copy()
-    rules = config.get("news_rules", {})
+    if window.empty:
+        return pd.DataFrame(columns=["code", "negative_news_score", "negative_news_hits"])
+    category_patterns = _compile_news_patterns(config)
     category_weights = {
-        category: float(rule.get("weight", 0.0))
-        for category, rule in rules.items()
+        category: weight for category, weight, _ in category_patterns
     }
     matched_by_code: dict[str, set[str]] = {}
     for row in window.itertuples(index=False):
         text = f"{row.title} {row.body}".lower()
-        matched: list[str] = []
-        for category, rule in rules.items():
-            terms = [str(term).lower() for term in rule.get("terms", [])]
-            if any(term in text for term in terms):
-                matched.append(category)
+        matched = [
+            category
+            for category, _, patterns in category_patterns
+            if any(pattern.search(text) for pattern in patterns)
+        ]
         if matched:
             matched_by_code.setdefault(row.code, set()).update(matched)
     if not matched_by_code:
@@ -156,10 +189,163 @@ def _news_scores(news: pd.DataFrame, asof: object, config: dict[str, Any]) -> pd
     )
 
 
+def _sorted_price_frame(prices: pd.DataFrame) -> pd.DataFrame:
+    """按 code/date 稳定排序并重建 RangeIndex，让同一只股票占据连续行号。"""
+    if "code" not in prices.columns or "date" not in prices.columns:
+        return prices.iloc[0:0].copy()
+    return prices.copy().sort_values(["code", "date"], kind="stable").reset_index(drop=True)
+
+
+def _split_adjust_factors(close: np.ndarray, threshold: float) -> np.ndarray:
+    """逐点给出后向复权因子，把跳变之前的价格折算到跳变之后的价位体系。
+
+    从后往前扫描：遇到 |单日涨跌幅| >= threshold 就视为一次拆股/合股，
+    此后所有更早的价格都要乘上该比例。返回的因子与 close 等长。
+    """
+    length = len(close)
+    factors = np.ones(length, dtype=float)
+    running = 1.0
+    for index in range(length - 1, 0, -1):
+        previous, current = close[index - 1], close[index]
+        if (
+            np.isfinite(previous)
+            and np.isfinite(current)
+            and previous > 0.0
+            and current > 0.0
+        ):
+            ratio = current / previous
+            if abs(ratio - 1.0) >= threshold:
+                running *= ratio
+        factors[index - 1] = running
+    return factors
+
+
+def find_split_adjustments(
+    prices: pd.DataFrame,
+    threshold: float = DEFAULT_SPLIT_ADJUST_THRESHOLD,
+) -> pd.DataFrame:
+    """列出所有会被拆股复权改动的跳变，供审计与报告使用（不修改输入）。
+
+    返回列为 code / date / prev_close / close / ratio 的明细表。
+    """
+    columns = ["code", "date", "prev_close", "close", "ratio"]
+    frame = _sorted_price_frame(prices)
+    if frame.empty or "close" not in frame.columns:
+        return pd.DataFrame(columns=columns)
+
+    records: list[dict[str, Any]] = []
+    for _, group in frame.groupby("code", sort=False):
+        close = pd.to_numeric(group["close"], errors="coerce").to_numpy(dtype=float)
+        for offset in range(1, len(close)):
+            previous, current = close[offset - 1], close[offset]
+            if not (
+                np.isfinite(previous)
+                and np.isfinite(current)
+                and previous > 0.0
+                and current > 0.0
+            ):
+                continue
+            ratio = current / previous
+            if abs(ratio - 1.0) >= threshold:
+                records.append(
+                    {
+                        "code": group["code"].iloc[offset],
+                        "date": group["date"].iloc[offset],
+                        "prev_close": previous,
+                        "close": current,
+                        "ratio": ratio,
+                    }
+                )
+    return pd.DataFrame(records, columns=columns)
+
+
+def _split_factors_from_events(
+    dates: np.ndarray,
+    events: pd.DataFrame,
+) -> np.ndarray:
+    """由权威拆股事件表算出每个交易日的后向复权因子。
+
+    yfinance 的 ratio 是「1 旧股换多少新股」：0.025 表示 1 并 40（价格 ×40），
+    2.0 表示 2 拆 1（价格 ÷2）。为了让价格序列连续，事件日之前的每个交易日
+    都要乘上 1/ratio；同一天之前若有多次事件，比例连乘。
+    """
+    factors = np.ones(len(dates), dtype=float)
+    for event_date, ratio in zip(events["date"], events["ratio"]):
+        if not np.isfinite(ratio) or ratio <= 0.0:
+            continue
+        factors = np.where(dates < np.datetime64(event_date), factors / ratio, factors)
+    return factors
+
+
+def _apply_split_adjustment(frame: pd.DataFrame, split_events: pd.DataFrame | None) -> pd.DataFrame:
+    """按权威拆股事件表对价格做后向复权。
+
+    yfinance 即便 auto_adjust=True 也没有真正复权拆股，序列里会留下
+    「一夜之间 4.24 -> 0.28」这种断崖（实测 MGN -93.4%、PSIG -87.7%、
+    ASBP 1 并 40 后单日 +2883%）。后果有两个：断崖会被 large_drop 条件当成
+    真实暴跌选进名单；跳升会让前瞻收益出现 +4173% 这种根本无法成交的数值。
+
+    只认 yfinance 的 Stock Splits 事件表，不靠价格跳变阈值猜 —— 港股仙股一天
+    翻倍是真行情（实测 00117 连跳三次却没有任何拆股事件），用阈值猜会把真实
+    行情改成假暴跌；反过来真正的合股也未必体现在缓存的价格序列里
+    （实测 00022 的 0.02 事件在缓存中根本看不到跳变）。
+
+    做法：把事件日之前的价格乘以累计比例、成交量除以同一比例，于是价格连续、
+    真实成交额 turnover 不变、窗口内量比也不受影响（分子分母同步缩放）。
+    """
+    if frame.empty or "close" not in frame.columns:
+        return frame
+    if split_events is None or len(split_events) == 0:
+        return frame
+
+    events = pd.DataFrame(split_events).copy()
+    missing = {"date", "code", "ratio"}.difference(events.columns)
+    if missing:
+        raise ValueError(f"拆股事件表缺少字段: {sorted(missing)}")
+    events["date"] = pd.to_datetime(events["date"], errors="coerce").dt.normalize()
+    events["code"] = events["code"].map(normalize_code)
+    events["ratio"] = pd.to_numeric(events["ratio"], errors="coerce")
+    events = events.dropna(subset=["date", "code", "ratio"])
+    if events.empty:
+        return frame
+
+    dates = pd.to_datetime(frame["date"], errors="coerce").dt.normalize().to_numpy()
+    events_by_code = {code: group for code, group in events.groupby("code", sort=False)}
+
+    # 用 GroupBy.indices 取位置（不是索引标签），这样即使调用方传进来的
+    # frame 不是 RangeIndex，按位置赋值也不会错位。
+    factors_all = np.ones(len(frame), dtype=float)
+    for code, positions in frame.groupby("code", sort=False).indices.items():
+        code_events = events_by_code.get(code)
+        if code_events is None:
+            continue
+        factors_all[positions] = _split_factors_from_events(dates[positions], code_events)
+
+    if np.allclose(factors_all, 1.0):
+        return frame
+
+    adjusted = frame.copy()
+    for column in ("open", "close"):
+        if column in adjusted.columns:
+            values = pd.to_numeric(adjusted[column], errors="coerce").to_numpy(dtype=float)
+            adjusted[column] = values * factors_all
+    if "volume" in adjusted.columns:
+        volume = pd.to_numeric(adjusted["volume"], errors="coerce").to_numpy(dtype=float)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            adjusted["volume"] = np.where(factors_all > 0.0, volume / factors_all, volume)
+    return adjusted
+
+
 def _prepare_prices(prices: pd.DataFrame, config: dict[str, Any]) -> pd.DataFrame:
-    frame = prices.copy().sort_values(["code", "date"])
+    frame = _sorted_price_frame(prices)
     if frame.empty:
         return frame
+
+    # 必须在 turnover 计算之前复权：价格与成交量反向缩放后，
+    # close * volume 恰好还原真实成交额，否则成交额会被拆股因子放大/缩小。
+    # 事件表由 adapters.fetch_yfinance_splits_bulk 提供；缺省时不做任何改动。
+    if bool(config.get("split_adjust", True)):
+        frame = _apply_split_adjustment(frame, config.get("split_events"))
 
     if "turnover" not in frame:
         frame["turnover"] = frame["close"] * frame["volume"]
@@ -447,6 +633,7 @@ def evaluate_signal(
 
     large_drop_max_pct = float(config.get("large_drop_max_pct", config.get("prior_drop_max_pct", -5.0)))
     other_day_max_pct = float(config.get("other_day_return_max_pct", config.get("today_return_max_pct", 0.5)))
+    liquidity = config.get("liquidity_filter", {})
 
     # 两日内任一日大跌且另一日涨幅 <= other_day_max_pct (默认0.5%)
     drop_yesterday = (result["prior_return_pct"] <= large_drop_max_pct) & (result["daily_return_pct"] <= other_day_max_pct)
@@ -468,8 +655,16 @@ def evaluate_signal(
         result["drop_strength_pct"] = result[["prior_return_pct", "daily_return_pct", "two_days_ago_return_pct"]].min(axis=1).abs()
         score_parameters = config.get("score_parameters", {})
         drop_cap_pct = float(score_parameters.get("drop_cap_pct", 15.0))
+        # 跌幅是显著的正向因子：跌得越深，T+3 超额越高。实测平均 IC 在两个市场
+        # 都为 +0.108，按跌幅分档近乎完美单调（美股 4.5~6% 档 +0.77%，
+        # >15% 档 +4.17%）；切前后两半检验符号一致（美股 +0.112/+0.103 均显著）。
+        # 注意该结论只在 200M 流动性门槛下成立 —— 门槛 1M 时符号是反的（IC -0.056），
+        # 因为那时深跌样本以仙股为主。改门槛和改本权重必须一起验证。
+        drop_weight = float(score_parameters.get("drop_weight", 1.0))
         volume_log_weight = float(score_parameters.get("volume_log_weight", 2.0))
         volume_ratio_cap = float(score_parameters.get("volume_ratio_cap", 8.0))
+        liquidity_log_weight = float(score_parameters.get("liquidity_log_weight", 0.0))
+        liquidity_ratio_cap = float(score_parameters.get("liquidity_ratio_cap", 100.0))
 
         drop_strength = pd.to_numeric(result["drop_strength_pct"], errors="coerce")
         drop_component = drop_strength.where(np.isfinite(drop_strength), 0.0).clip(
@@ -482,9 +677,21 @@ def evaluate_signal(
         ).where(np.isfinite(volume_ratio), 0.0)
         news_risk = pd.to_numeric(result["negative_news_score"], errors="coerce")
         news_risk = news_risk.where(np.isfinite(news_risk), 0.0)
+        # 流动性分量：以策略自身的「20 日中位成交额门槛」为 1 倍基准取对数加分，
+        # 让同等跌幅下成交更活跃的标的排在前面，避免放松门槛后小票霸榜。
+        liquidity_base = max(float(liquidity.get("min_prior_median_turnover", 0.0)), 1.0)
+        liquidity_ratio = pd.to_numeric(
+            result["prior_turnover_median"], errors="coerce"
+        ).div(liquidity_base)
+        liquidity_ratio = (
+            liquidity_ratio.where(np.isfinite(liquidity_ratio), 1.0)
+            .clip(lower=1.0, upper=liquidity_ratio_cap)
+        )
+        liquidity_component = liquidity_log_weight * np.log10(liquidity_ratio)
         result["score"] = (
-            drop_component
+            drop_weight * drop_component
             + volume_component
+            + liquidity_component
             - news_risk
         )
 
@@ -507,7 +714,6 @@ def evaluate_signal(
             & (result["industry_avg_return_pct"] > float(config.get("industry_mean_min_pct", 0.0)))
         )
     if strategy_mode == "two_day_drop":
-        liquidity = config.get("liquidity_filter", {})
         min_current_turnover = float(liquidity.get("min_current_turnover", 0.0))
         min_prior_median_turnover = float(liquidity.get("min_prior_median_turnover", 0.0))
         min_traded_days = int(liquidity.get("min_traded_days", 0))
@@ -567,12 +773,15 @@ def append_forward_observations(
     prices: pd.DataFrame,
     asof: object,
     trading_days: int,
+    config: dict[str, Any] | None = None,
 ) -> pd.DataFrame:
     """Append post-signal prices for historical checks without affecting selection."""
     if result.empty or trading_days <= 0:
         return result
 
-    prepared = _prepare_prices(prices, {})
+    # 必须把 config 透传进来，否则拿不到拆股事件表：合股股票的前瞻收益
+    # 会重现 +4173% 这种根本不可能成交的假数（实测 ASBP 1 并 40）。
+    prepared = _prepare_prices(prices, config or {})
     signal_date = pd.Timestamp(asof).normalize()
     future_dates = [
         pd.Timestamp(value)
