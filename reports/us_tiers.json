@@ -1,0 +1,18 @@
+{
+  "market": "US",
+  "asof": "2026-09-11",
+  "tiers": [
+    {
+      "label": "200M",
+      "slug": "200m",
+      "csv": "outputs/scan_us_two_day_drop_200m_2026-09-11.csv",
+      "count": 22
+    },
+    {
+      "label": "50M",
+      "slug": "50m",
+      "csv": "outputs/scan_us_two_day_drop_50m_2026-09-11.csv",
+      "count": 71
+    }
+  ]
+}
