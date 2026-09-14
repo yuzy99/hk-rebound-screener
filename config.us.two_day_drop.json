@@ -32,6 +32,14 @@
     { "label": "200M", "slug": "200m", "min_prior_median_turnover": 200000000 },
     { "label": "50M", "slug": "50m", "min_prior_median_turnover": 50000000 }
   ],
+  "stable_filter": {
+    "enabled": true,
+    "label": "已趋于平稳",
+    "large_drop_max_pct": -4.5,
+    "today_min_return_pct": -4.5,
+    "all_days_return_max_pct": 1.0,
+    "push_max_cards": 20
+  },
   "score_weights": {
     "drop_strength": 1.0,
     "volume_anomaly": 1.0,

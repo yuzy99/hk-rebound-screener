@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import random
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
@@ -18,6 +19,8 @@ HKEX_SECURITIES_URL = (
     "securitieslists/ListOfSecurities.xlsx"
 )
 YFINANCE_BATCH_SIZE = 100
+YFINANCE_MAX_WORKERS = 4
+YFINANCE_CHECKPOINT_BATCHES = 10
 YFINANCE_RETRY_DELAYS = (2.0, 5.0, 10.0)
 YFINANCE_CACHE_DIR = Path("data") / "yfinance_cache"
 AKSHARE_HISTORY_CACHE_FILE = Path("data") / "akshare_cache" / "hk_history.csv"
@@ -206,7 +209,7 @@ def enrich_yfinance_industry(
     result[["code", "industry", "name"]].drop_duplicates("code").to_csv(
         cache_file,
         index=False,
-        encoding="utf-8-sig",
+        encoding="utf-8",
     )
     missing_count = int(result["industry"].eq("").sum())
     if missing_count:
@@ -252,11 +255,21 @@ def fetch_yfinance_history_bulk(
     end_date: date,
     auto_adjust: bool = True,
     chunk_size: int = YFINANCE_BATCH_SIZE,
+    include_high_low: bool = False,
+    cache_dir: Path | None = None,
 ) -> pd.DataFrame:
-    """Fetch many US/HK daily bars in chunks to reduce per-symbol requests."""
+    """Fetch many US/HK daily bars in chunks to reduce per-symbol requests.
+
+    ``include_high_low`` is opt-in so lightweight callers remain backward-
+    compatible while full-market HK/US caches can store complete OHLCV fields
+    required by downstream backtests.
+    """
     import yfinance as yf
 
-    columns = ["date", "code", "open", "close", "volume"]
+    columns = ["date", "code", "open"]
+    if include_high_low:
+        columns.extend(["high", "low"])
+    columns.extend(["close", "volume"])
     cache_columns = columns + ["auto_adjust", "adjustment_factor"]
     empty = pd.DataFrame(columns=columns)
     rows: list[pd.DataFrame] = []
@@ -265,6 +278,7 @@ def fetch_yfinance_history_bulk(
     requested_codes = set(code_map.values())
     cached = pd.DataFrame(columns=cache_columns)
     cache_file: Path | None = None
+    history_cache_dir = Path(cache_dir) if cache_dir is not None else YFINANCE_CACHE_DIR
 
     def parse_bool(value: object) -> bool | None:
         text = str(value).strip().lower()
@@ -275,7 +289,7 @@ def fetch_yfinance_history_bulk(
         return None
 
     if market.upper() in {"US", "HK"}:
-        cache_file = YFINANCE_CACHE_DIR / f"{market.lower()}_history.csv"
+        cache_file = history_cache_dir / f"{market.lower()}_history.csv"
         try:
             cached = pd.read_csv(cache_file, dtype={"code": str})
             required = set(cache_columns)
@@ -284,7 +298,9 @@ def fetch_yfinance_history_bulk(
             cached = cached[cache_columns].copy()
             cached["date"] = pd.to_datetime(cached["date"], errors="coerce").dt.normalize()
             cached["code"] = cached["code"].map(normalize_code)
-            for column in ["open", "close", "volume"]:
+            for column in ["open", "high", "low", "close", "volume"]:
+                if column not in cached:
+                    continue
                 cached[column] = pd.to_numeric(cached[column], errors="coerce")
             cached["auto_adjust"] = cached["auto_adjust"].map(parse_bool)
             cached["adjustment_factor"] = pd.to_numeric(cached["adjustment_factor"], errors="coerce")
@@ -342,13 +358,19 @@ def fetch_yfinance_history_bulk(
                         subframe = frame.xs(symbol, level=1, axis=1)
                 else:
                     subframe = frame
-                if "Close" not in subframe or "Volume" not in subframe:
+                required_source_columns = {"Open", "Close", "Volume"}
+                if include_high_low:
+                    required_source_columns.update({"High", "Low"})
+                if not required_source_columns.issubset(subframe.columns):
                     missing.append(symbol)
                     continue
                 subframe = subframe.copy()
                 subframe["date"] = _yfinance_local_date(subframe.index).values
                 subframe["code"] = code_map[symbol]
                 subframe["open"] = pd.to_numeric(subframe.get("Open"), errors="coerce")
+                if include_high_low:
+                    subframe["high"] = pd.to_numeric(subframe.get("High"), errors="coerce")
+                    subframe["low"] = pd.to_numeric(subframe.get("Low"), errors="coerce")
                 subframe["close"] = pd.to_numeric(subframe["Close"], errors="coerce")
                 subframe["volume"] = pd.to_numeric(subframe["Volume"], errors="coerce")
                 if "Adj Close" in subframe:
@@ -358,7 +380,8 @@ def fetch_yfinance_history_bulk(
                     subframe["adjustment_factor"] = 1.0
                 subframe["auto_adjust"] = bool(auto_adjust)
                 subframe = subframe[cache_columns].dropna(
-                    subset=["date", "code", "close", "volume"]
+                    subset=["date", "code", "open", "close", "volume"]
+                    + (["high", "low"] if include_high_low else [])
                 )
                 subframe["adjustment_factor"] = pd.to_numeric(
                     subframe["adjustment_factor"], errors="coerce"
@@ -398,6 +421,12 @@ def fetch_yfinance_history_bulk(
                 remaining = missing
                 if not remaining:
                     return collected, []
+                # A non-empty response with only some symbols missing is a
+                # symbol-level data gap (often a delisted or unsupported
+                # ticker), not a transient batch failure. Split immediately
+                # so one such ticker cannot consume all retry delays.
+                if not frame.empty:
+                    break
             except Exception as error:  # noqa: BLE001 - retry/split keeps other batches usable
                 print(
                     f"WARN bulk history batch {len(remaining)} symbols, attempt {attempt + 1}: {error}",
@@ -414,22 +443,76 @@ def fetch_yfinance_history_bulk(
             return collected + left_rows + right_rows, left_missing + right_missing
         return collected, remaining
 
+    def write_cache(frame: pd.DataFrame) -> None:
+        if cache_file is None:
+            return
+        temporary_file = cache_file.with_name(f"{cache_file.name}.tmp")
+        try:
+            cache_file.parent.mkdir(parents=True, exist_ok=True)
+            frame.to_csv(temporary_file, index=False, encoding="utf-8")
+            temporary_file.replace(cache_file)
+        except Exception:
+            temporary_file.unlink(missing_ok=True)
+            raise
+
+    def write_checkpoint(completed: int) -> None:
+        if cache_file is None or not rows:
+            return
+        checkpoint = pd.concat([cached, *rows], ignore_index=True)
+        checkpoint = checkpoint.drop_duplicates(
+            ["date", "code"], keep="last"
+        ).sort_values(["code", "date"])
+        try:
+            write_cache(checkpoint)
+            print(f"历史行情 checkpoint: {completed}/{len(symbols)}", flush=True)
+        except Exception as error:  # noqa: BLE001 - checkpoint is best effort
+            print(f"WARN yfinance checkpoint write {cache_file}: {error}", flush=True)
+
     def download_symbols(symbols_to_fetch: list[str], starts: dict[str, date]) -> list[str]:
         failed: list[str] = []
         grouped: dict[date, list[str]] = {}
         for symbol in symbols_to_fetch:
             grouped.setdefault(starts[code_map[symbol]], []).append(symbol)
+        batches = [
+            group_symbols[offset : offset + chunk_size]
+            for group_symbols in grouped.values()
+            for offset in range(0, len(group_symbols), chunk_size)
+        ]
+        if not batches:
+            return failed
+        workers = min(YFINANCE_MAX_WORKERS, len(batches)) if chunk_size > 1 else 1
+        print(
+            f"yfinance 下载调度: {len(batches)} 批，受控并发 {workers}，每批最多 {chunk_size} 只",
+            flush=True,
+        )
         completed = 0
-        for group_symbols in grouped.values():
-            for batch_start in range(0, len(group_symbols), chunk_size):
-                batch = group_symbols[batch_start : batch_start + chunk_size]
+        completed_batches = 0
+
+        def consume(batch: list[str], batch_rows: list[pd.DataFrame], batch_failed: list[str]) -> None:
+            nonlocal completed, completed_batches
+            rows.extend(batch_rows)
+            failed.extend(batch_failed)
+            completed += len(batch)
+            completed_batches += 1
+            print(f"批量历史行情: {completed}/{len(symbols_to_fetch)}", flush=True)
+            if completed_batches % YFINANCE_CHECKPOINT_BATCHES == 0 or completed == len(symbols_to_fetch):
+                write_checkpoint(completed)
+
+        if workers == 1:
+            for batch in batches:
                 batch_rows, batch_failed = download_batch(batch, starts)
-                rows.extend(batch_rows)
-                failed.extend(batch_failed)
-                completed += len(batch)
-                print(f"批量历史行情: {completed}/{len(symbols_to_fetch)}")
-                if completed < len(symbols_to_fetch):
-                    time.sleep(random.uniform(0.5, 1.5))
+                consume(batch, batch_rows, batch_failed)
+        else:
+            with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="yfinance") as executor:
+                futures = {executor.submit(download_batch, batch, starts): batch for batch in batches}
+                for future in as_completed(futures):
+                    batch = futures[future]
+                    try:
+                        batch_rows, batch_failed = future.result()
+                    except Exception as error:  # noqa: BLE001 - isolate one failed batch
+                        print(f"WARN bulk history worker failed for {len(batch)} symbols: {error}", flush=True)
+                        batch_rows, batch_failed = [], batch
+                    consume(batch, batch_rows, batch_failed)
         return failed
 
     failed_symbols = download_symbols(symbols, download_starts)
@@ -471,7 +554,7 @@ def fetch_yfinance_history_bulk(
             try:
                 assert cache_file is not None
                 cache_file.parent.mkdir(parents=True, exist_ok=True)
-                combined.to_csv(cache_file, index=False, encoding="utf-8-sig")
+                write_cache(combined)
             except Exception as error:  # noqa: BLE001 - cache write failure must not stop a scan
                 print(f"WARN yfinance cache write {cache_file}: {error}", flush=True)
         fresh = combined[columns]
@@ -567,10 +650,9 @@ def fetch_yfinance_splits_bulk(
         flush=True,
     )
 
-    rows: list[pd.DataFrame] = []
-    failed: list[str] = []
-    for start in range(0, len(symbols), chunk_size):
-        chunk = symbols[start : start + chunk_size]
+    def fetch_split_batch(chunk: list[str]) -> tuple[list[pd.DataFrame], list[str]]:
+        batch_rows: list[pd.DataFrame] = []
+        batch_failed: list[str] = []
         try:
             payload = yf.download(
                 tickers=chunk,
@@ -580,16 +662,14 @@ def fetch_yfinance_splits_bulk(
                 actions=True,
                 progress=False,
                 group_by="ticker",
-                threads=True,
+                threads=False,
             )
         except Exception as error:  # 单批失败不该拖垮整轮
-            print(f"WARN yfinance splits batch {start}: {error}", flush=True)
-            failed.extend(chunk)
-            continue
+            print(f"WARN yfinance splits batch {len(chunk)}: {error}", flush=True)
+            return batch_rows, list(chunk)
 
         if payload is None or payload.empty:
-            failed.extend(chunk)
-            continue
+            return batch_rows, list(chunk)
 
         for symbol in chunk:
             try:
@@ -597,13 +677,13 @@ def fetch_yfinance_splits_bulk(
             except Exception:
                 block = None
             if block is None or "Stock Splits" not in getattr(block, "columns", []):
-                failed.append(symbol)
+                batch_failed.append(symbol)
                 continue
             events = pd.to_numeric(block["Stock Splits"], errors="coerce").dropna()
             events = events[events.gt(0.0)]
             if events.empty:
                 continue
-            rows.append(
+            batch_rows.append(
                 pd.DataFrame(
                     {
                         "date": pd.to_datetime(events.index).tz_localize(None).normalize(),
@@ -612,6 +692,30 @@ def fetch_yfinance_splits_bulk(
                     }
                 )
             )
+        return batch_rows, batch_failed
+
+    batches = [symbols[start : start + chunk_size] for start in range(0, len(symbols), chunk_size)]
+    workers = min(YFINANCE_MAX_WORKERS, len(batches)) if len(batches) > 1 else 1
+    print(f"yfinance 拆股调度: {len(batches)} 批，受控并发 {workers}", flush=True)
+    rows: list[pd.DataFrame] = []
+    failed: list[str] = []
+    if workers == 1:
+        for chunk in batches:
+            batch_rows, batch_failed = fetch_split_batch(chunk)
+            rows.extend(batch_rows)
+            failed.extend(batch_failed)
+    else:
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="yfinance-splits") as executor:
+            futures = {executor.submit(fetch_split_batch, chunk): chunk for chunk in batches}
+            for future in as_completed(futures):
+                chunk = futures[future]
+                try:
+                    batch_rows, batch_failed = future.result()
+                except Exception as error:  # noqa: BLE001 - isolate one failed batch
+                    print(f"WARN yfinance splits worker failed for {len(chunk)} symbols: {error}", flush=True)
+                    batch_rows, batch_failed = [], chunk
+                rows.extend(batch_rows)
+                failed.extend(batch_failed)
 
     if failed:
         print(f"WARN yfinance splits 未返回 ({len(failed)}): {','.join(failed[:10])}", flush=True)
@@ -654,7 +758,14 @@ def build_full_market_prices(
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     today = date.today()
     start = today - timedelta(days=history_days * 2)
-    history = fetch_yfinance_history_bulk(codes, market, start, today, auto_adjust=auto_adjust)
+    history = fetch_yfinance_history_bulk(
+        codes,
+        market,
+        start,
+        today,
+        auto_adjust=auto_adjust,
+        include_high_low=market.upper() in {"HK", "US"},
+    )
     if market.upper() == "HK":
         spot = fetch_akshare_spot()
         spot = spot.loc[spot["code"].isin({normalize_code(code) for code in codes})].copy()
@@ -1058,8 +1169,41 @@ def build_us_live_prices(
     return prices.reset_index(drop=True), spot
 
 
+def _fast_info_value(fast: object, *names: str) -> object:
+    """按候选键名依次取值，兼容 yfinance 版本间的键名差异。
+
+    实测 yfinance 1.7 的键名是 `yearHigh` / `yearLow`：`fifty_two_week_high`
+    在这个版本取不到（`in` 判定为 False，`.get()` 给 None），但别的版本用的是
+    另外几种写法。几种都试一遍，免得升级后静默退化成 NaN。
+    """
+    for name in names:
+        try:
+            value = fast[name]  # type: ignore[index]
+        except Exception:  # noqa: BLE001 - 键不存在/未懒加载都算取不到
+            value = None
+        if value is None:
+            value = getattr(fast, name, None)
+        if value is not None:
+            return value
+    return None
+
+
+def _finite_float(value: object) -> float:
+    """转成 float；取不到或非有限值一律给 NaN，让 pandas 当缺失处理。"""
+    try:
+        number = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return float("nan")
+    return number if np.isfinite(number) else float("nan")
+
+
 def enrich_candidate_fundamentals(codes: list[str], market: str) -> pd.DataFrame:
-    """批量或按需为初筛通过的候选股获取总市值、PE与PB指标。"""
+    """批量或按需为初筛通过的候选股获取总市值、PE/PB 与 52 周高/低。
+
+    52 周高/低由 Yahoo 算好放在 fast_info 里（键名 yearHigh / yearLow），
+    所以本地面板只有 163 个交易日也拿得到 —— 不靠我们自己攒够 252 天。
+    这正是本函数已经在调的那个 fast_info，两个字段零额外请求。
+    """
     import yfinance as yf
 
     rows: list[dict[str, Any]] = []
@@ -1069,11 +1213,19 @@ def enrich_candidate_fundamentals(codes: list[str], market: str) -> pd.DataFrame
         market_cap = None
         pe = None
         pb = None
+        week52_high = float("nan")
+        week52_low = float("nan")
         try:
             ticker = yf.Ticker(symbol)
             fast = getattr(ticker, "fast_info", None)
             if fast:
                 market_cap = getattr(fast, "market_cap", None)
+                week52_high = _finite_float(
+                    _fast_info_value(fast, "yearHigh", "year_high", "fiftyTwoWeekHigh")
+                )
+                week52_low = _finite_float(
+                    _fast_info_value(fast, "yearLow", "year_low", "fiftyTwoWeekLow")
+                )
             info = getattr(ticker, "info", {}) or {}
             if not market_cap:
                 market_cap = info.get("marketCap")
@@ -1086,5 +1238,7 @@ def enrich_candidate_fundamentals(codes: list[str], market: str) -> pd.DataFrame
             "market_cap": market_cap,
             "pe": pe,
             "pb": pb,
+            "week52_high": week52_high,
+            "week52_low": week52_low,
         })
     return pd.DataFrame(rows)

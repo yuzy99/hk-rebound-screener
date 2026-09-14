@@ -68,7 +68,7 @@ jobs:
       - name: Run HK full-market latest strategy
         env:
           PYTHONPATH: src
-          REPORT_HTML_PATH: reports/hk_latest.html
+          REPORT_HTML_DIR: reports
           REPORT_TEMPLATE_PATH: templates/stock_report_template.html
         run: |
           CONFIG_FILE="config.hk.two_day_drop.json"
@@ -122,13 +122,17 @@ jobs:
         id: deployment
         uses: actions/deploy-pages@v4
 
-      - name: Push HK codes and report link
+      - name: Push HK codes and report links
         if: success()
         env:
           PYTHONPATH: src
           NOTIFICATION_WEBHOOK: ${{ secrets.NOTIFICATION_WEBHOOK }}
-          REPORT_PAGE_URL: https://yuzy99.github.io/hk-rebound-screener/hk_latest.html
-        run: python scripts/send_report_link.py --market HK --csv-glob 'outputs/scan_hk_*.csv'
+          REPORT_PAGE_BASE_URL: https://yuzy99.github.io/hk-rebound-screener
+        run: |
+          python scripts/send_report_link.py \
+            --market HK \
+            --tiers-manifest reports/hk_tiers.json \
+            --page-base-url "$REPORT_PAGE_BASE_URL"
 
       - name: Upload HK scan CSV
         if: always()

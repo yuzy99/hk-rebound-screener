@@ -325,7 +325,7 @@ def _apply_split_adjustment(frame: pd.DataFrame, split_events: pd.DataFrame | No
         return frame
 
     adjusted = frame.copy()
-    for column in ("open", "close"):
+    for column in ("open", "high", "low", "close"):
         if column in adjusted.columns:
             values = pd.to_numeric(adjusted[column], errors="coerce").to_numpy(dtype=float)
             adjusted[column] = values * factors_all
@@ -334,6 +334,43 @@ def _apply_split_adjustment(frame: pd.DataFrame, split_events: pd.DataFrame | No
         with np.errstate(divide="ignore", invalid="ignore"):
             adjusted["volume"] = np.where(factors_all > 0.0, volume / factors_all, volume)
     return adjusted
+
+
+def _attach_prior_risk_factors(frame: pd.DataFrame, lookback: int) -> pd.DataFrame:
+    """20 日风险因子：MAX 彩票、波动率、Amihud 非流动性。
+
+    三个都 shift(1)，描述「下跌之前」的状态而不是信号当日 —— 信号日那根深跌
+    本身就是要预测的对象，把它算进因子里等于用答案当特征。命名沿用
+    prior_volume_median 的 prior_ 前缀。
+
+    - prior_max_return_pct：过去 20 日最大单日涨幅（Bali-Cakici-Whitelaw 2011，
+      负向）。用来区分「稳定票被错杀」和「刚炒完一波在回吐」。
+    - prior_return_std_pct：过去 20 日收益率标准差。给 drop_z 做归一化用 ——
+      现在 3% 日波动的票跌 8%（2.7σ）和 8% 波动的票跌 8%（1σ）拿同样的分。
+      用「之前」的波动率而不是包含暴跌的窗口，免得崩盘本身把 σ 撑大、自我抵消。
+    - prior_amihud：mean(|日涨跌幅| / 当日成交额)（Amihud 2002），逐票滑点代理，
+      用来替掉回测里那个零成本假设。
+      ⚠️ 用本币成交额算，港美股之间不可比（同一个 7.8× 币种坑）。
+    """
+    grouped = frame.groupby("code", group_keys=False)
+    for column, aggregator in (
+        ("prior_max_return_pct", "max"),
+        ("prior_return_std_pct", "std"),
+    ):
+        frame[column] = grouped["daily_return_pct"].transform(
+            lambda values, how=aggregator: (
+                values.shift(1).rolling(lookback, min_periods=lookback).agg(how)
+            )
+        )
+    returns = pd.to_numeric(frame["daily_return_pct"], errors="coerce").replace(
+        [np.inf, -np.inf], np.nan
+    )
+    turnover = pd.to_numeric(frame["turnover"], errors="coerce").replace(0.0, np.nan)
+    frame["_illiquidity"] = returns.abs().div(turnover)
+    frame["prior_amihud"] = frame.groupby("code", group_keys=False)["_illiquidity"].transform(
+        lambda values: values.shift(1).rolling(lookback, min_periods=lookback).mean()
+    )
+    return frame.drop(columns=["_illiquidity"])
 
 
 def _prepare_prices(prices: pd.DataFrame, config: dict[str, Any]) -> pd.DataFrame:
@@ -393,6 +430,7 @@ def _prepare_prices(prices: pd.DataFrame, config: dict[str, Any]) -> pd.DataFram
             aligned["prior_volume_median"].replace(0, np.nan)
         )
         aligned["volume_anomaly"] = (aligned["volume_ratio"] - 1.0).clip(lower=0.0)
+        _attach_prior_risk_factors(aligned, lookback)
         frame = aligned.reset_index().dropna(subset=["date", "code", "close"])
     else:
         grouped = frame.groupby("code", group_keys=False)
@@ -412,6 +450,7 @@ def _prepare_prices(prices: pd.DataFrame, config: dict[str, Any]) -> pd.DataFram
             frame["prior_volume_median"].replace(0, np.nan)
         )
         frame["volume_anomaly"] = (frame["volume_ratio"] - 1.0).clip(lower=0.0)
+        _attach_prior_risk_factors(frame, lookback)
 
     return frame.sort_values(["code", "date"]).reset_index(drop=True)
 
@@ -548,16 +587,97 @@ def _common_filters(
     return common_filters
 
 
+def stable_filter_config(config: dict[str, Any]) -> dict[str, Any]:
+    """「已趋于平稳」规则的参数。
+
+    缺 stable_filter 配置块（例如港股配置）时 enabled 为 False：新列全部落空，
+    报告与推送退回原样，旧配置的行为逐字节不变。
+    """
+    raw = config.get("stable_filter") or {}
+    fallback_drop = float(config.get("large_drop_max_pct", -5.0))
+    return {
+        "enabled": bool(raw.get("enabled", False)),
+        "label": str(raw.get("label", "已趋于平稳")),
+        "large_drop_max_pct": float(raw.get("large_drop_max_pct", fallback_drop)),
+        "today_min_return_pct": float(raw.get("today_min_return_pct", fallback_drop)),
+        "all_days_return_max_pct": float(raw.get("all_days_return_max_pct", 1.0)),
+        "push_max_cards": int(raw.get("push_max_cards", 20)),
+    }
+
+
+def stable_rule_text(stable: dict[str, Any]) -> str:
+    """规则的文字描述，印在报告与推送标题的括号里。
+
+    从阈值现算，不在 config 里写死一句话 —— 否则改了数值、描述还停在旧数。
+    """
+    return (
+        f"T-1/T-2/T-3 至少一日跌幅 ≤ {stable['large_drop_max_pct']:g}%；"
+        f"T 日 > {stable['today_min_return_pct']:g}%；"
+        f"T 至 T-3 四日涨幅均 ≤ +{stable['all_days_return_max_pct']:g}%"
+    )
+
+
+def _two_day_drop_score(
+    drop_strength: pd.Series,
+    result: pd.DataFrame,
+    score_parameters: dict[str, Any],
+    liquidity: dict[str, Any],
+) -> pd.Series:
+    """两条规则共用的评分公式：跌幅 + 量能 + 流动性 − 新闻风险。
+
+    只有 drop_strength 一项按规则不同（现规则是 T-2..T 三日窗口，已趋于平稳是
+    T-3..T 四日窗口），其余分量完全一致 —— 抄成两份迟早会漂移。
+
+    流动性分量的基准固定取 liquidity_filter 的官方门槛，不随档位变化；
+    这也是 apply_liquidity_tier 不重算本函数结果的原因。
+    """
+    drop_cap_pct = float(score_parameters.get("drop_cap_pct", 15.0))
+    drop_weight = float(score_parameters.get("drop_weight", 1.0))
+    volume_log_weight = float(score_parameters.get("volume_log_weight", 2.0))
+    volume_ratio_cap = float(score_parameters.get("volume_ratio_cap", 8.0))
+    liquidity_log_weight = float(score_parameters.get("liquidity_log_weight", 0.0))
+    liquidity_ratio_cap = float(score_parameters.get("liquidity_ratio_cap", 100.0))
+
+    numeric_drop = pd.to_numeric(drop_strength, errors="coerce")
+    drop_component = numeric_drop.where(np.isfinite(numeric_drop), 0.0).clip(
+        lower=0.0,
+        upper=drop_cap_pct,
+    )
+    volume_ratio = pd.to_numeric(result["volume_ratio"], errors="coerce")
+    volume_component = (
+        volume_log_weight * np.log2(volume_ratio.clip(lower=1.0, upper=volume_ratio_cap))
+    ).where(np.isfinite(volume_ratio), 0.0)
+    news_risk = pd.to_numeric(result["negative_news_score"], errors="coerce")
+    news_risk = news_risk.where(np.isfinite(news_risk), 0.0)
+    liquidity_base = max(float(liquidity.get("min_prior_median_turnover", 0.0)), 1.0)
+    liquidity_ratio = pd.to_numeric(
+        result["prior_turnover_median"], errors="coerce"
+    ).div(liquidity_base)
+    liquidity_ratio = (
+        liquidity_ratio.where(np.isfinite(liquidity_ratio), 1.0)
+        .clip(lower=1.0, upper=liquidity_ratio_cap)
+    )
+    liquidity_component = liquidity_log_weight * np.log10(liquidity_ratio)
+    return (
+        drop_weight * drop_component
+        + volume_component
+        + liquidity_component
+        - news_risk
+    )
+
+
 def apply_liquidity_tier(
     result: pd.DataFrame,
     config: dict[str, Any],
     min_prior_median_turnover: float,
 ) -> pd.DataFrame:
-    """用另一档流动性门槛重算 liquidity_ok / passes，其余一律照抄。
+    """用另一档流动性门槛重算 liquidity_ok / passes（以及并列规则的 stable_passes），
+    其余一律照抄。
 
-    刻意只动这两个标志位列，**不重算 score**：score 里的流动性分量以官方
+    刻意只动这几个标志位列，**不重算 score**：score 里的流动性分量以官方
     liquidity_filter 的对数基准为准，按档重算会让同一只票在两个页面上分数不同，
     也会让已归档的 CSV 失真（见 strategy.py 里「改门槛和改权重必须一起验证」那段）。
+    stable_score 同理，一并照抄。
 
     也刻意**不做 sort_values**：入参已按 score 降序，score 不变就不该重排 ——
     pandas 默认排序不稳定，重排会打乱并列项，破坏与基准的逐行一致。
@@ -579,6 +699,10 @@ def apply_liquidity_tier(
         & np.isfinite(frame["prior_turnover_median"])
     )
     frame["passes"] = common_filters & frame["three_day_drop_ok"] & frame["liquidity_ok"]
+    if "stable_drop_ok" in frame.columns:
+        frame["stable_passes"] = (
+            common_filters & frame["stable_drop_ok"] & frame["liquidity_ok"]
+        )
     return frame
 
 
@@ -615,6 +739,17 @@ def evaluate_signal(
             prepared["date"] == two_days_ago_date, ["code", "daily_return_pct"]
         ].rename(columns={"daily_return_pct": "two_days_ago_return_pct"})
         result = result.merge(two_days_ago, on="code", how="inner")
+    # 「已趋于平稳」要 T-3。这里必须用 left merge：上面两条 inner merge 会按
+    # 「有没有那一天的 bar」筛掉代码，对 T-3 照抄就会静默缩小现规则的输出。
+    # 历史不足 4 个交易日时列留 NaN，只有新规则落空，现规则完全不受影响。
+    if strategy_mode == "two_day_drop":
+        if stable_filter_config(config)["enabled"] and len(dates) >= 4:
+            three_days_ago = prepared.loc[
+                prepared["date"] == dates[-4], ["code", "daily_return_pct"]
+            ].rename(columns={"daily_return_pct": "three_days_ago_return_pct"})
+            result = result.merge(three_days_ago, on="code", how="left")
+        if "three_days_ago_return_pct" not in result.columns:
+            result["three_days_ago_return_pct"] = np.nan
     result = result.merge(universe.drop(columns=["enabled"], errors="ignore"), on="code", how="left")
     if result.empty:
         return result
@@ -727,47 +862,20 @@ def evaluate_signal(
 
     if strategy_mode == "two_day_drop":
         # 保留旧字段名以兼容已有输出，但策略窗口改为最近三个交易日。
-        result["drop_strength_pct"] = result[["prior_return_pct", "daily_return_pct", "two_days_ago_return_pct"]].min(axis=1).abs()
-        score_parameters = config.get("score_parameters", {})
-        drop_cap_pct = float(score_parameters.get("drop_cap_pct", 15.0))
         # 跌幅是显著的正向因子：跌得越深，T+3 超额越高。实测平均 IC 在两个市场
         # 都为 +0.108，按跌幅分档近乎完美单调（美股 4.5~6% 档 +0.77%，
         # >15% 档 +4.17%）；切前后两半检验符号一致（美股 +0.112/+0.103 均显著）。
         # 注意该结论只在 200M 流动性门槛下成立 —— 门槛 1M 时符号是反的（IC -0.056），
         # 因为那时深跌样本以仙股为主。改门槛和改本权重必须一起验证。
-        drop_weight = float(score_parameters.get("drop_weight", 1.0))
-        volume_log_weight = float(score_parameters.get("volume_log_weight", 2.0))
-        volume_ratio_cap = float(score_parameters.get("volume_ratio_cap", 8.0))
-        liquidity_log_weight = float(score_parameters.get("liquidity_log_weight", 0.0))
-        liquidity_ratio_cap = float(score_parameters.get("liquidity_ratio_cap", 100.0))
-
-        drop_strength = pd.to_numeric(result["drop_strength_pct"], errors="coerce")
-        drop_component = drop_strength.where(np.isfinite(drop_strength), 0.0).clip(
-            lower=0.0,
-            upper=drop_cap_pct,
-        )
-        volume_ratio = pd.to_numeric(result["volume_ratio"], errors="coerce")
-        volume_component = (
-            volume_log_weight * np.log2(volume_ratio.clip(lower=1.0, upper=volume_ratio_cap))
-        ).where(np.isfinite(volume_ratio), 0.0)
-        news_risk = pd.to_numeric(result["negative_news_score"], errors="coerce")
-        news_risk = news_risk.where(np.isfinite(news_risk), 0.0)
-        # 流动性分量：以策略自身的「20 日中位成交额门槛」为 1 倍基准取对数加分，
+        #
+        # 流动性分量以策略自身的「20 日中位成交额门槛」为 1 倍基准取对数加分，
         # 让同等跌幅下成交更活跃的标的排在前面，避免放松门槛后小票霸榜。
-        liquidity_base = max(float(liquidity.get("min_prior_median_turnover", 0.0)), 1.0)
-        liquidity_ratio = pd.to_numeric(
-            result["prior_turnover_median"], errors="coerce"
-        ).div(liquidity_base)
-        liquidity_ratio = (
-            liquidity_ratio.where(np.isfinite(liquidity_ratio), 1.0)
-            .clip(lower=1.0, upper=liquidity_ratio_cap)
-        )
-        liquidity_component = liquidity_log_weight * np.log10(liquidity_ratio)
-        result["score"] = (
-            drop_weight * drop_component
-            + volume_component
-            + liquidity_component
-            - news_risk
+        result["drop_strength_pct"] = result[["prior_return_pct", "daily_return_pct", "two_days_ago_return_pct"]].min(axis=1).abs()
+        result["score"] = _two_day_drop_score(
+            result["drop_strength_pct"],
+            result,
+            config.get("score_parameters", {}),
+            liquidity,
         )
 
     common_filters = _common_filters(result, config, strategy_mode, lot_value_column, max_lot_value)
@@ -778,6 +886,15 @@ def evaluate_signal(
         three_day_returns = result[[
             "two_days_ago_return_pct", "prior_return_pct", "daily_return_pct",
         ]]
+        # 三日累计涨跌幅，以及按波动率归一化后的跌幅。σ 取 prior_return_std_pct
+        # （暴跌之前那 20 日的波动率），不用包含今日的窗口 —— 否则崩盘自己把 σ
+        # 撑大，z 值被自我抵消。除以 √3 是因为三日累计的方差是单日的 3 倍。
+        result["three_day_return_pct"] = three_day_returns.sum(axis=1, min_count=3)
+        if "prior_return_std_pct" in result:
+            sigma = pd.to_numeric(result["prior_return_std_pct"], errors="coerce")
+            result["drop_z"] = (
+                -result["three_day_return_pct"]
+            ).div(sigma.mul(np.sqrt(3.0))).where(sigma.gt(0.0))
         result["large_drop_ok"] = (
             three_day_returns.le(float(config.get("large_drop_max_pct", -5.0))).any(axis=1)
         )
@@ -800,6 +917,40 @@ def evaluate_signal(
             & result["three_day_drop_ok"]
             & result["liquidity_ok"]
         )
+
+        # ---- 并列的第二条规则「已趋于平稳」 ----
+        # 大跌窗口整体后移一天（T-1/T-2/T-3），T 当天必须不是大跌日，四天涨幅都 ≤ q。
+        # 窗口后移是为了不在大跌次日早上抢反弹；T > 下限 是必须单独写的一条 ——
+        # q 是**上**限，光有它的话「T 就是大跌日本身」也会通过，买点又变回大跌次日。
+        # 这一整块只新增列，一个字节都不碰上面的 passes / drop_strength_pct / three_day_drop_ok。
+        stable = stable_filter_config(config)
+        four_day_returns = result[[
+            "three_days_ago_return_pct", "two_days_ago_return_pct",
+            "prior_return_pct", "daily_return_pct",
+        ]]
+        stale_big_drop = result[[
+            "two_days_ago_return_pct", "prior_return_pct", "three_days_ago_return_pct",
+        ]].le(stable["large_drop_max_pct"]).any(axis=1)
+        result["stable_drop_ok"] = (
+            bool(stable["enabled"])
+            & stale_big_drop
+            & result["daily_return_pct"].gt(stable["today_min_return_pct"])
+            & four_day_returns.le(stable["all_days_return_max_pct"]).all(axis=1)
+        )
+        result["stable_drop_strength_pct"] = four_day_returns.min(axis=1).abs()
+        # 四日累计涨跌只用于展示，min_count=4 保证缺任何一天就是 NaN，不拿三天冒充四天。
+        result["stable_four_day_return_pct"] = four_day_returns.sum(axis=1, min_count=4)
+        result["stable_score"] = _two_day_drop_score(
+            result["stable_drop_strength_pct"],
+            result,
+            config.get("score_parameters", {}),
+            liquidity,
+        )
+        result["stable_passes"] = (
+            common_filters
+            & result["stable_drop_ok"]
+            & result["liquidity_ok"]
+        )
     else:
         lag_condition = (
             (result["lag_vs_industry_pct"] >= float(config.get("lag_min_pct", 1.0)))
@@ -817,10 +968,16 @@ def evaluate_signal(
     ]
     if strategy_mode == "two_day_drop":
         columns.extend([
-            "two_days_ago_return_pct", "turnover", "prior_turnover_median",
-            "prior_traded_days", "large_drop_ok", "other_days_ok", "three_day_drop_ok",
-            "consecutive_down_ok", "liquidity_ok",
+            "two_days_ago_return_pct", "three_days_ago_return_pct",
+            "three_day_return_pct", "drop_z", "turnover",
+            "prior_turnover_median", "prior_traded_days", "large_drop_ok", "other_days_ok",
+            "three_day_drop_ok", "consecutive_down_ok", "liquidity_ok",
+            "stable_drop_ok", "stable_drop_strength_pct", "stable_four_day_return_pct",
+            "stable_score", "stable_passes",
         ])
+    # 20 日风险因子（#6.1 MAX / #6.2 波动率 / #6.3 Amihud）只出列不参与评分 ——
+    # 权重得先过增量 IC 那一关，别在 131 天上手拍。
+    columns.extend(["prior_max_return_pct", "prior_return_std_pct", "prior_amihud"])
     if lot_value_column not in columns:
         columns.insert(6, lot_value_column)
     return result[[column for column in columns if column in result]].sort_values("score", ascending=False)

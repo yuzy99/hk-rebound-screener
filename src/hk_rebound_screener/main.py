@@ -36,6 +36,8 @@ from .strategy import (
     load_prices,
     load_universe,
     run_backtest,
+    stable_filter_config,
+    stable_rule_text,
 )
 
 
@@ -53,6 +55,27 @@ def _validated_live_asof(spot: pd.DataFrame, prices: pd.DataFrame) -> object | N
     if "timestamp" in spot:
         return spot["timestamp"].max()
     return spot_date
+
+
+def _apply_snapshot_names(universe: pd.DataFrame, spot: pd.DataFrame) -> pd.DataFrame:
+    """用行情快照里的名字覆盖 universe 的 name，但只在快照名确实是个名字时才覆盖。
+
+    build_full_market_prices 的美股分支把 spot["name"] 填成了代码本身，无条件覆盖
+    会把 universe 里从 us_industry.csv 带出来的真实公司名（"Agilent Technologies"）
+    整列冲成 Ticker —— 实测 @2026-09-10 那 5,174 只全军覆没，报告上读作 "CASY CASY"。
+    港股的 AKShare 快照给的是中文名（优必选/李宁），照旧覆盖。
+    """
+    if spot.empty or "name" not in spot or "code" not in spot:
+        return universe
+    snapshot_name = spot["name"].fillna("").astype(str).str.strip()
+    usable = snapshot_name.ne("") & snapshot_name.ne(spot["code"].astype(str).str.strip())
+    named = spot.loc[usable, ["code", "name"]].drop_duplicates("code")
+    if named.empty:
+        return universe
+    name_map = dict(zip(named["code"], named["name"]))
+    return universe.assign(
+        name=universe["code"].map(name_map).fillna(universe["name"])
+    )
 
 
 def parse_args() -> argparse.Namespace:
@@ -77,7 +100,7 @@ def main() -> None:
     market = str(config.get("market", "HK")).upper()
     strategy_mode = str(config.get("strategy_mode", "rebound")).lower()
     # 同一份扫描结果按不同流动性门槛切档，每档一个 CSV + 一个页面。
-    # 只有配了 liquidity_tiers 的市场（目前仅美股）才走这条路径，港股逐字节不变。
+    # 只有配了 liquidity_tiers 的市场才走这条路径；港美股目前都配了 200M / 50M 两档。
     tiers = config.get("liquidity_tiers") or []
     tiered = bool(tiers) and strategy_mode == "two_day_drop"
     if args.mode == "backtest" and strategy_mode == "industry_lag_rebound":
@@ -230,11 +253,7 @@ def main() -> None:
 
     fundamentals = pd.DataFrame(columns=["code", "market_cap", "pe", "pb"])
     if full_market_scan and strategy_mode != "industry_lag_rebound":
-        if not spot.empty and "name" in spot:
-            cn_names = spot.loc[spot["name"].fillna("").astype(str).str.strip().ne(""), ["code", "name"]].drop_duplicates("code")
-            if not cn_names.empty:
-                name_map = dict(zip(cn_names["code"], cn_names["name"]))
-                universe["name"] = universe["code"].map(name_map).fillna(universe["name"])
+        universe = _apply_snapshot_names(universe, spot)
 
         # 新闻与估值是第二阶段：先筛价格/行业条件，再对候选股抓新闻和PE/PB/市值。
         # 初筛必须用最松的那一档门槛：若按 200M 初筛，50–200M 那批票根本不会被送进
@@ -289,6 +308,14 @@ def main() -> None:
         )
     if not fundamentals.empty:
         result = result.merge(fundamentals, on="code", how="left")
+        # 距 52 周高/低用复权后的 close 去比：Yahoo 的 yearHigh/yearLow 是当前
+        # 股本口径，和后向复权后的价格同一把尺子，不会因为拆股错开。
+        if {"week52_high", "week52_low", "close"} <= set(result.columns):
+            close = pd.to_numeric(result["close"], errors="coerce")
+            high = pd.to_numeric(result["week52_high"], errors="coerce")
+            low = pd.to_numeric(result["week52_low"], errors="coerce")
+            result["pct_from_52w_high"] = (close.div(high.mask(high.eq(0.0))) - 1.0) * 100.0
+            result["pct_above_52w_low"] = (close.div(low.mask(low.eq(0.0))) - 1.0) * 100.0
     strategy_suffix = "" if strategy_mode == "rebound" else f"_{strategy_mode}"
     output_path = output_dir / f"scan_{market.lower()}{strategy_suffix}_{pd.Timestamp(asof).date().isoformat()}.csv"
     result.to_csv(output_path, index=False, encoding="utf-8-sig")
@@ -299,7 +326,30 @@ def main() -> None:
     else:
         print(passed.to_string(index=False))
 
-    report_md = format_markdown_report(result, market=market, asof=str(pd.Timestamp(asof).date()), config=config)
+    # 「已趋于平稳」是线上规则之外并列的一条：只按官方门槛算一次（不随档位变），
+    # 单独出一份 CSV 给推送脚本读。没配 stable_filter（港股配置）就整块跳过，
+    # 下面的页面和清单因此和改动前逐字节一致。
+    stable = stable_filter_config(config)
+    stable_rules = ""
+    stable_hits = 0
+    stable_csv: Path | None = None
+    if stable["enabled"] and "stable_passes" in result.columns:
+        stable_rules = stable_rule_text(stable)
+        stable_csv = output_dir / (
+            f"scan_{market.lower()}{strategy_suffix}_stable_{pd.Timestamp(asof).date().isoformat()}.csv"
+        )
+        result.loc[result["stable_passes"]].to_csv(stable_csv, index=False, encoding="utf-8-sig")
+        stable_hits = int(result["stable_passes"].sum())
+        print(f"{stable['label']}推荐: 命中 {stable_hits} 只；CSV: {stable_csv}")
+
+    report_md = format_markdown_report(
+        result,
+        market=market,
+        asof=str(pd.Timestamp(asof).date()),
+        config=config,
+        stable_result=result,
+        stable_rules=stable_rules,
+    )
     write_step_summary(report_md)
     template_path = os.environ.get(
         "REPORT_TEMPLATE_PATH",
@@ -337,6 +387,9 @@ def main() -> None:
                 asof=asof_text,
                 config=tier_config,
                 tier_label=f"{label} 流动性门槛",
+                # 新规则只算一次，每档页面看到的都是官方门槛那一批，不随档位变。
+                stable_result=result,
+                stable_rules=stable_rules,
             )
             write_step_summary(tier_md)
             render_html_report(
@@ -355,13 +408,34 @@ def main() -> None:
                 "csv": Path(os.path.relpath(tier_csv, ROOT)).as_posix(),
                 "count": count,
             })
+        manifest: dict[str, object] = {
+            "market": market,
+            "asof": asof_text,
+            "tiers": manifest_tiers,
+        }
+        if stable_csv is not None:
+            # 新规则挂在官方门槛那一档的页面上，推送脚本靠 tier_slug 找到它的链接。
+            official_threshold = float(
+                (config.get("liquidity_filter") or {}).get("min_prior_median_turnover", 0.0)
+            )
+            stable_slug = next(
+                (
+                    str(tier["slug"])
+                    for tier in tiers
+                    if float(tier["min_prior_median_turnover"]) == official_threshold
+                ),
+                str(tiers[0]["slug"]) if tiers else "",
+            )
+            manifest["stable"] = {
+                "label": stable["label"],
+                "rules": stable_rules,
+                "csv": Path(os.path.relpath(stable_csv, ROOT)).as_posix(),
+                "count": stable_hits,
+                "tier_slug": stable_slug,
+            }
         manifest_path = tiers_dir / f"{market.lower()}_tiers.json"
         manifest_path.write_text(
-            json.dumps(
-                {"market": market, "asof": asof_text, "tiers": manifest_tiers},
-                ensure_ascii=False,
-                indent=2,
-            ),
+            json.dumps(manifest, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
         print(f"档位清单: {manifest_path}")

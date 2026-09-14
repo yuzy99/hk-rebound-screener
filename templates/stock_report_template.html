@@ -1763,13 +1763,34 @@
 
   <script>
     // Parser Logic
+    // 「🧊 已趋于平稳推荐（规则…）」→「已趋于平稳推荐」：去掉开头 emoji 和括号里的规则。
+    function groupLabel(heading) {
+      return heading
+        .replace(/^##\s*/, '')
+        .replace(/^[^\p{L}\p{N}]+/u, '')
+        .split('（')[0]
+        .trim();
+    }
+
     function parseData(md) {
       const stocks = [];
-      const blocks = md.split('### ').slice(1);
+      // 卡片分组 = 它上方最近的一个 `## ` 标题。只影响展示，顺序仍按 markdown 原样。
+      const blocks = [];
+      let group = '';
+      for (const line of md.split('\n')) {
+        if (line.startsWith('## ')) {
+          group = groupLabel(line);
+        } else if (line.startsWith('### ')) {
+          blocks.push({ group, lines: [line.slice(4)] });
+        } else if (blocks.length > 0) {
+          blocks[blocks.length - 1].lines.push(line);
+        }
+      }
+
       for (const block of blocks) {
-        const lines = block.split('\n').map(l => l.trim()).filter(l => l);
+        const lines = block.lines.map(l => l.trim()).filter(l => l);
         if (lines.length === 0) continue;
-        
+
         const titleLine = lines[0];
         const idMatch = titleLine.match(/(\d+)\.\s+`?([A-Za-z0-9._-]+)`?/);
         if (!idMatch) continue;
@@ -1824,7 +1845,7 @@
             const dMatch = line.match(/跌幅强度 \`(.*?)\`/);
             if (dMatch) dropIntensity = dMatch[1];
           }
-          if (line.includes('三日信号') || line.includes('两日涨跌')) {
+          if (line.includes('三日信号') || line.includes('四日信号') || line.includes('两日涨跌')) {
             const todayMatch = line.match(/(?:\*\*T\*\*|今日(?:\(T\))?)\s*\`(.*?)\`/);
             if (todayMatch) todayChange = todayMatch[1];
             const dMatch = line.match(/最大跌幅\s*\`(.*?)\`/);
@@ -1855,8 +1876,8 @@
         }
         
         stocks.push({
-          id, ticker, industry, price, volume, turnover, volRatio, volAnomaly, 
-          todayChange, dropIntensity, marketCap, pe, pb, score, 
+          id, ticker, group: block.group, industry, price, volume, turnover, volRatio, volAnomaly,
+          todayChange, dropIntensity, marketCap, pe, pb, score,
           rawLines: lines.slice(1)
         });
       }
@@ -1938,9 +1959,10 @@
           <!-- Top Row -->
           <div class="flex justify-between items-start">
             <div class="flex flex-col gap-1.5">
-              <div class="flex items-center gap-2.5">
+              <div class="flex items-center gap-2.5 flex-wrap">
                 <h2 class="text-2xl font-extrabold text-zinc-950 tracking-tight leading-none">${stock.ticker}</h2>
                 <span class="font-mono text-[10px] font-bold text-zinc-500 bg-zinc-100 px-2 py-1 rounded-md leading-none border border-zinc-200/50">#${stock.id}</span>
+                ${stock.group ? `<span class="self-start text-[10px] font-bold text-sky-700 bg-sky-50 px-2 py-1 rounded-md leading-none border border-sky-100">${escapeHtml(stock.group)}</span>` : ''}
               </div>
               <p class="text-xs text-zinc-400 font-semibold truncate max-w-[200px]">${stock.industry}</p>
             </div>
@@ -2032,9 +2054,10 @@
       const searchInput = document.getElementById('search-input');
       searchInput.addEventListener('input', (e) => {
         const query = e.target.value.toLowerCase();
-        const filtered = allStocks.filter(stock => 
-          stock.ticker.toLowerCase().includes(query) || 
-          stock.industry.toLowerCase().includes(query)
+        const filtered = allStocks.filter(stock =>
+          stock.ticker.toLowerCase().includes(query) ||
+          stock.industry.toLowerCase().includes(query) ||
+          stock.group.toLowerCase().includes(query)
         );
         renderCards(filtered);
       });

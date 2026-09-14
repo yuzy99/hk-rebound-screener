@@ -9,10 +9,12 @@ from pathlib import Path
 import pandas as pd
 
 from hk_rebound_screener.notifier import (
+    format_daily_push,
     format_report_link_notification,
     format_tiered_report_link_notification,
     send_webhook_notification,
 )
+from hk_rebound_screener.strategy import load_config
 
 
 def _parse_args() -> argparse.Namespace:
@@ -29,6 +31,16 @@ def _parse_args() -> argparse.Namespace:
         default=None,
         help="GitHub Pages 站点根地址；每档 URL 由它和 slug 拼出，避免 URL 与页面各说各话",
     )
+    parser.add_argument(
+        "--stable-csv",
+        default=None,
+        help="只调试用：覆盖清单里「已趋于平稳」那份 CSV 的路径",
+    )
+    parser.add_argument(
+        "--config",
+        default=None,
+        help="策略配置 JSON；默认按 --market 推断 config.<market>.two_day_drop.json",
+    )
     return parser.parse_args()
 
 
@@ -36,12 +48,48 @@ def _passed_values(values: pd.Series) -> pd.Series:
     return values.astype(str).str.strip().str.lower().isin({"true", "1", "yes", "y", "通过", "✅"})
 
 
-def _load_passed_codes(csv_path: Path) -> list[str]:
+def _load_scan_frame(csv_path: Path, column: str) -> pd.DataFrame:
     result = pd.read_csv(csv_path, dtype={"code": str})
-    if "passes" not in result.columns or "code" not in result.columns:
-        raise SystemExit(f"扫描结果缺少 code 或 passes 字段：{csv_path}")
+    missing = [name for name in ("code", column) if name not in result.columns]
+    if missing:
+        raise SystemExit(f"扫描结果缺少 {' 或 '.join(missing)} 字段：{csv_path}")
+    return result
+
+
+def _count_passed(frame: pd.DataFrame, column: str) -> int:
+    return int(_passed_values(frame[column]).sum())
+
+
+def _load_passed_codes(csv_path: Path) -> list[str]:
+    result = _load_scan_frame(csv_path, "passes")
     passed = _passed_values(result["passes"])
     return [str(code).strip() for code in result.loc[passed, "code"].tolist()]
+
+
+def _stable_section(
+    args: argparse.Namespace, manifest: dict, base_url: str
+) -> tuple[pd.DataFrame | None, str, str]:
+    """读清单里的「已趋于平稳」块，返回 (整帧, 规则文本, 该段报告链接)。"""
+    block = manifest.get("stable")
+    if not block:
+        return None, "", ""
+    csv_path = Path(args.stable_csv or str(block["csv"]))
+    if not csv_path.is_absolute():
+        csv_path = Path.cwd() / csv_path
+    if not csv_path.exists():
+        raise SystemExit(f"没有找到「已趋于平稳」名单：{csv_path}")
+    frame = _load_scan_frame(csv_path, "stable_passes")
+    # 和档位名单同一条规矩：数量对不上就吵出来，绝不推一份和页面对不上的名单。
+    hits = _count_passed(frame, "stable_passes")
+    expected = int(block["count"])
+    if hits != expected:
+        raise SystemExit(
+            f"{block['label']}推荐名单与清单不符：{csv_path.name} 命中 {hits} 只，"
+            f"清单记的是 {expected} 只；stable_passes 列可能是陈旧的"
+        )
+    print(f"{block['label']}推荐：命中 {hits} 只")
+    report_url = f"{base_url.rstrip('/')}/{args.market.lower()}_{block['tier_slug']}.html"
+    return frame, str(block.get("rules", "")), report_url
 
 
 def _tier_content(args: argparse.Namespace, manifest_path: Path) -> tuple[str, str]:
@@ -70,7 +118,26 @@ def _tier_content(args: argparse.Namespace, manifest_path: Path) -> tuple[str, s
             "codes": codes,
             "report_url": f"{base_url.rstrip('/')}/{args.market.lower()}_{tier['slug']}.html",
         })
-    return format_tiered_report_link_notification(tiers, args.market, asof), asof
+
+    stable_result, stable_rules, stable_report_url = _stable_section(args, manifest, base_url)
+    if stable_result is None:
+        return format_tiered_report_link_notification(tiers, args.market, asof), asof
+
+    config_path = Path(args.config or f"config.{args.market.lower()}.two_day_drop.json")
+    if not config_path.is_absolute():
+        config_path = Path.cwd() / config_path
+    if not config_path.exists():
+        raise SystemExit(f"没有找到策略配置：{config_path}")
+    content = format_daily_push(
+        args.market,
+        asof,
+        load_config(config_path),
+        tiers,
+        stable_result=stable_result,
+        stable_rules=stable_rules,
+        stable_report_url=stable_report_url,
+    )
+    return content, asof
 
 
 def main() -> None:

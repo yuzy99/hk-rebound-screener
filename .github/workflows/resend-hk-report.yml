@@ -38,5 +38,5 @@ jobs:
         env:
           PYTHONPATH: src
           NOTIFICATION_WEBHOOK: ${{ secrets.NOTIFICATION_WEBHOOK }}
-          REPORT_PAGE_URL: https://yuzy99.github.io/hk-rebound-screener/hk_latest.html
+          REPORT_PAGE_URL: https://yuzy99.github.io/hk-rebound-screener/hk_200m.html
         run: python scripts/send_report_link.py --market HK --csv-glob 'resend_input/**/*.csv'

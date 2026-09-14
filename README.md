@@ -33,6 +33,12 @@ python -m hk_rebound_screener.main --mode live --full-market --config .\config.h
 
 美股对应配置为 `config.us.two_day_drop.json`，官方流动性门槛同样是 `2,000,000 / 200,000,000`，但单位为美元，筛选窗口和跌幅条件相同。GitHub Actions 的定时运行和手动运行均固定使用这两个最新配置；旧配置文件仅保留作本地兼容和历史参考，不再作为 GitHub 扫描入口。
 
+> ⚠️ **同一个 `200,000,000` 在两个市场代表的钱不一样。** 港股走 `turnover_hkd`（`adapters.py:723,893`），阈值是 2 亿**港币** ≈ US$25.6M；美股走 `close * volume`（`adapters.py:1039-1058` 不设 turnover 列，落到 `strategy.py:351` 的兜底），阈值是 2 亿**美元**。**这个字段不做汇率换算** —— 同一个配置里 `max_lot_value_hkd` 走 `usd_hkd_rate` 换了、它没换。所以港美股各自的命中率/收益**不可直接横向比较**：美股那 2 亿美元在美股是中盘偏上，港股这 2 亿港币在港股是中小盘，等于一个市场买大票、另一个买小票。要对齐得单独改基准门槛，那会改掉官方名单，所以没有顺手做。
+
+### 港美股同构双档（200M / 50M）
+
+美股双档从 2026-09-11 起生效，**港股自 2026-09-14 起同样拆两档**，两边 `liquidity_tiers` 结构和 slug 完全一致，只有本币单位不同。
+
 ### 美股双档（200M / 50M）
 
 2026-09-11 的两档回测（131 个信号日，2026-03-02 → 2026-09-04，T+1 开盘买 → T+3 收盘卖，扣同档流动性池中位）显示两档都显著为正，200M 每笔质量更高、50M 总收益更高：
@@ -43,9 +49,9 @@ python -m hk_rebound_screener.main --mode live --full-market --config .\config.h
 | 50M 全档 | 9,760 | +0.32% | 5.92 |
 | 50M 独有（增量 69 只） | 4,558 | +0.21% | 2.83 |
 
-所以美股每天同时出两份名单：`us_200m.html`（官方 200M 档）和 `us_50m.html`（50M 全档，**含**已经过 200M 的那批）。港股不拆档，仍是单页 `hk_latest.html`。
+所以两个市场每天各出两份名单：`us_200m.html` / `us_50m.html` 和 `hk_200m.html` / `hk_50m.html`（每档的 50M 页**含**已经过 200M 的那批）。200M 档 == 各自官方的单页名单，一只不变；50M 档是纯增量。
 
-- 配置写在 `config.us.two_day_drop.json` 的 `liquidity_tiers`，每档的 `slug` 同时决定 CSV 名（`scan_us_two_day_drop_<slug>_<date>.csv`）、页面名和推送链接。没有这个键的市场走原来的单页路径。
+- 配置写在各自的 `liquidity_tiers`（`config.us.two_day_drop.json` 与 `config.hk.two_day_drop.json`，两边结构相同、单位各为本币），每档的 `slug` 同时决定 CSV 名（`scan_<market>_two_day_drop_<slug>_<date>.csv`）、页面名和推送链接。没有这个键的市场走原来的单页路径（`REPORT_HTML_PATH` + `--csv-glob`）。
 - **一次扫描出两档，绝不跑两遍**：行情、新闻、基本面只做一次，两档从同一份结果派生。
 - 初筛用最松的那档门槛。若按 200M 初筛，50–200M 那批票根本不会去抓新闻，`negative_news_score` 会被 `fillna` 成 0，在 50M 页上等同于「没有新闻风险」。最终那次 `evaluate_signal` 仍用官方 config，官方 CSV 不变。
 - **`score` 不按档重算**（`apply_liquidity_tier` 只重算 `liquidity_ok` 和 `passes`）：同一只票在两个页面上分数相同，两页可直接对比；`L` 的对数基准固定为官方 200M 门槛。代价是 50M 页上 50–200M 区间的票流动性分量被 `max(L, 1)` 夹到 0，排序略吃亏。
@@ -113,6 +119,19 @@ live 模式会调用 AKShare 的港股全市场延时快照，再按 `universe.c
 - **机器人消息推送（可选）**：在 GitHub 仓库的 **Settings -> Secrets and variables -> Actions** 中添加名为 `NOTIFICATION_WEBHOOK` 的 Secret（填入 PushPlus Token 或其他支持的 Webhook 地址）。工作流会先把完整中文报告发布到 GitHub Pages，再只推送全部股票代码和对应的 GitHub Pages 链接；港股与美股共用 `templates/stock_report_template.html` 的手机模板。港股是一条消息一个链接；美股是一条消息**两个链接**（200M 与 50M 各一段代码列表加各自的页面地址）。
 
 本仓库的 GitHub 远端为 `https://github.com/yuzy99/hk-rebound-screener.git`；推送后可在仓库的 **Actions** 页面启用或查看 workflow。定时任务只会使用最新策略配置，扫描产生的结果仍按现有 workflow 规则保存为 Actions artifact。
+
+## 官方 HKEX / HKEXnews 数据
+
+官方数据下载入口为 `scripts/download_hkex_sources.py`。它将 HKEX 日报和证券主表写入 `data/hkex_cache/`，将 HKEXnews 公告索引写入 `data/hkexnews_cache/`，两条来源不会合并；默认请求最近约四年：
+
+```powershell
+$env:PYTHONPATH = "$PWD\src"
+.\.venv\Scripts\python.exe .\scripts\download_hkex_sources.py
+```
+
+`data/hkex_cache/securities_master.csv` 是当前 HKEX 普通股证券主表，`daily_quotations.csv` 是公开 Daily Quotations 页面可见窗口的主板/GEM报价，覆盖范围和 OHLC 异常数见 `quality.json`。`data/hkexnews_cache/announcements.csv` 是四年公告索引，按“公告—证券”一行展开，保留 `published_at`、`news_id`、`category` 和官方 `file_url`；公告 PDF 不批量复制到本地，公告时间必须先于回测信号才可使用。
+
+HKEX公开日报页面只提供当前网页窗口，早于该窗口的四年历史不会用其他源冒充官方 HKEX 数据；若需要四年官方收盘/成交历史，应通过 HKEX Data Marketplace 的授权产品取得。下载器会把请求区间、实际覆盖、失败查询、重复键、空字段和价格逻辑检查写入两个目录各自的 `quality.json`。
 
 ## 必须维护的元数据
 

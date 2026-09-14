@@ -216,22 +216,29 @@ def test_render_html_report_market_label_lands_in_title_and_h1(tmp_path: Path) -
     assert labeled == plain.replace("美股", "美股（50M 流动性门槛）")
 
 
-def test_us_config_declares_two_tiers_and_hk_declares_none() -> None:
-    us = load_config(US_CONFIG_PATH)
-    tiers = us["liquidity_tiers"]
+def test_both_markets_declare_the_same_two_tiers() -> None:
+    """港美股必须同构：同为 200M / 50M 两档，slug 不带市场前缀。
 
-    assert [tier["slug"] for tier in tiers] == ["200m", "50m"]
-    assert [tier["label"] for tier in tiers] == ["200M", "50M"]
-    thresholds = [float(tier["min_prior_median_turnover"]) for tier in tiers]
-    assert min(thresholds) == 50e6
-    # 官方基准仍是 200M，liquidity_tiers 只是额外多出的一档。
-    assert float(us["liquidity_filter"]["min_prior_median_turnover"]) == 200e6
-    assert min(thresholds) <= float(us["liquidity_filter"]["min_prior_median_turnover"])
-    # slug 不带市场前缀：CSV 名读作 scan_us_two_day_drop_200m_<date>.csv，
-    # 页面名由 market + slug 拼成，send_report_link.py 的日期正则可以原样复用。
-    assert all(not tier["slug"].startswith("us") for tier in tiers)
+    只能比结构，不能比绝对值 —— 两档阈值都按本币计价（美股美元、港股港币），
+    `200000000` 在美股是 2 亿美元、在港股是 2 亿港币，实际差 7.8 倍，且这个
+    字段不走 usd_hkd_rate 换算。让两边金额真正等价要动官方基准门槛，那会改掉
+    官方名单本身，不属于分档的职责范围。
+    """
+    for config_path in (US_CONFIG_PATH, HK_CONFIG_PATH):
+        config = load_config(config_path)
+        tiers = config["liquidity_tiers"]
 
-    assert not load_config(HK_CONFIG_PATH).get("liquidity_tiers")
+        assert [tier["slug"] for tier in tiers] == ["200m", "50m"], config_path
+        assert [tier["label"] for tier in tiers] == ["200M", "50M"], config_path
+        thresholds = [float(tier["min_prior_median_turnover"]) for tier in tiers]
+        assert min(thresholds) == 50e6, config_path
+        # 官方基准仍是 200M，liquidity_tiers 只是额外多出的一档。
+        official = float(config["liquidity_filter"]["min_prior_median_turnover"])
+        assert official == 200e6, config_path
+        assert min(thresholds) <= official, config_path
+        # slug 不带市场前缀：CSV 名读作 scan_<market>_two_day_drop_200m_<date>.csv，
+        # 页面名由 market + slug 拼成，send_report_link.py 的日期正则可以原样复用。
+        assert all(not tier["slug"].startswith(("us", "hk")) for tier in tiers), config_path
 
 
 # --------------------------------------------------------------------------

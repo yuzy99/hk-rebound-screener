@@ -5,3 +5,6 @@ outputs/
 .pytest_cache/
 vendor/
 data/yfinance_cache/
+data/yfinance_cache_10y/
+data/hkex_cache/
+data/hkexnews_cache/

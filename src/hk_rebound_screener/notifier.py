@@ -147,6 +147,35 @@ def _format_pb(val: Any) -> str:
         return "-"
 
 
+def _format_price(val: Any) -> str:
+    """价格统一三位有效小数再去掉尾零，和卡片里 close 的写法保持一致。"""
+    if pd.isna(val) or val is None:
+        return "-"
+    try:
+        return f"{float(val):.3f}".rstrip("0").rstrip(".")
+    except Exception:
+        return "-"
+
+
+def _format_number(val: Any, digits: int = 2, sign: bool = False, suffix: str = "") -> str:
+    if pd.isna(val) or val is None:
+        return "-"
+    try:
+        return f"{float(val):{'+' if sign else ''}.{digits}f}{suffix}"
+    except Exception:
+        return "-"
+
+
+def _format_amihud(val: Any) -> str:
+    """Amihud 是 1e-8 量级的比值，直印小数点后 8 位没法读，统一放大 1e8。"""
+    if pd.isna(val) or val is None:
+        return "-"
+    try:
+        return f"{float(val) * 1e8:.2f}"
+    except Exception:
+        return "-"
+
+
 US_COMMON_NAMES: dict[str, str] = {
     "AAPL": "苹果 (Apple)",
     "MSFT": "微软 (Microsoft)",
@@ -234,6 +263,60 @@ def format_tiered_report_link_notification(
     return "\n".join(lines)
 
 
+def _passed_rows(frame: pd.DataFrame | None, column: str) -> pd.DataFrame:
+    """按某一列布尔标记切出命中行；列不存在（港股没有 stable 列）就当空。"""
+    if frame is None or frame.empty or column not in frame.columns:
+        return pd.DataFrame()
+    return frame.loc[frame[column].astype(bool)].copy()
+
+
+def format_daily_push(
+    market: str,
+    asof: str,
+    config: dict[str, Any],
+    tiers: list[dict[str, Any]],
+    stable_result: pd.DataFrame | None = None,
+    stable_rules: str = "",
+    stable_report_url: str = "",
+) -> str:
+    """每天发到微信的那一条：「已趋于平稳」展开完整卡片置顶，现规则维持今天的短格式。
+
+    现规则那半截直接复用 format_tiered_report_link_notification 的输出，
+    这样「保留线上的筛选」是字面意义上的保留 —— 一个字符都不会变。
+    """
+    body = format_tiered_report_link_notification(tiers, market, asof)
+    header, _, remainder = body.partition("\n")
+
+    stable_passed = _passed_rows(stable_result, "stable_passes")
+    if stable_passed.empty:
+        return body
+
+    stable_config = config.get("stable_filter") or {}
+    label = str(stable_config.get("label", "已趋于平稳"))
+    max_cards = int(stable_config.get("push_max_cards", 20))
+    market_upper = market.upper()
+    currency = "USD" if market_upper == "US" else "HKD"
+    strategy_mode = str(config.get("strategy_mode", "rebound")).lower()
+
+    lines: list[str] = [f"## 🧊 {label}推荐（{stable_rules}）", ""]
+    shown = stable_passed.head(max_cards) if max_cards > 0 else stable_passed
+    for rank, (_, row) in enumerate(shown.iterrows(), start=1):
+        lines.extend(
+            _render_stock_card(
+                row, rank, market, market_upper, currency, strategy_mode, config, stable=True
+            )
+        )
+    hidden = [str(code).strip() for code in stable_passed["code"].tolist()[len(shown) :]]
+    if hidden:
+        lines.append(f"> 其余 {len(hidden)} 只见完整报告：")
+        lines.extend(_format_code_chunks(hidden))
+        lines.append("")
+    if stable_report_url:
+        lines.extend([f"🔗 完整报告：{stable_report_url}", ""])
+
+    return "\n".join([header, "", *lines, remainder.lstrip("\n")])
+
+
 def render_html_report(
     markdown: str,
     market: str,
@@ -270,12 +353,184 @@ def render_html_report(
     return output
 
 
+def _render_stock_card(
+    row: pd.Series,
+    rank: int,
+    market: str,
+    market_upper: str,
+    currency: str,
+    strategy_mode: str,
+    config: dict[str, Any],
+    stable: bool = False,
+) -> list[str]:
+    """渲染一只股票的整张 Markdown 卡片（标题行 + 详情行 + 分隔线）。
+
+    从 format_markdown_report 的逐股循环里原样抽出：`stable=False` 那一支的字节
+    输出必须和抽出前逐字一致，线上报表的回归对比盯着这一条。
+    `stable=True` 走「已趋于平稳」的四日窗口：多一行 T-3、跌幅取四日最大、
+    评分取 stable_score、并多一行四日累计涨跌。
+    """
+    code = str(row.get("code", "")).strip()
+    name = _clean_stock_name(code, row.get("name", ""), market)
+    raw_industry = str(row.get("industry", "")).strip()
+    if strategy_mode == "industry_lag_rebound" and not bool(row.get("industry_data_ok", False)):
+        raw_industry = ""
+    industry = _translate_industry(raw_industry) if raw_industry else "无行业数据"
+    close = f"{float(row['close']):.3f}".rstrip("0").rstrip(".") + f" {currency}" if pd.notna(row.get("close")) else "-"
+    prior_value = row.get("yesterday_return_pct", row.get("prior_return_pct"))
+    two_days_ago_value = row.get("day_before_yesterday_return_pct", row.get("two_days_ago_return_pct"))
+    daily_value = row.get("today_return_pct", row.get("daily_return_pct"))
+    industry_value = row.get("industry_return_pct", row.get("industry_avg_return_pct"))
+    prior_ret = f"{float(prior_value):+.2f}%" if pd.notna(prior_value) else "-"
+    two_days_ago_ret = f"{float(two_days_ago_value):+.2f}%" if pd.notna(two_days_ago_value) else "-"
+    daily_ret = f"{float(daily_value):+.2f}%" if pd.notna(daily_value) else "-"
+    ind_avg = f"{float(industry_value):+.2f}%" if pd.notna(industry_value) else "-"
+    lag = f"{float(row['lag_vs_industry_pct']):+.2f}%" if pd.notna(row.get("lag_vs_industry_pct")) else "-"
+    vol_ratio = f"{float(row['volume_ratio']):.2f}x" if pd.notna(row.get("volume_ratio")) else "-"
+    score_value = row.get("stable_score") if stable else row.get("score")
+    score = f"{float(score_value):.2f}" if pd.notna(score_value) else "-"
+    score_label = "落后行业排序分" if strategy_mode == "industry_lag_rebound" else "综合评分"
+    drop_value = row.get("stable_drop_strength_pct") if stable else row.get("drop_strength_pct")
+    drop_strength = f"−{abs(float(drop_value)):.2f}%" if pd.notna(drop_value) else "-"
+    turnover_value = pd.to_numeric(row.get("turnover"), errors="coerce")
+    prior_turnover_value = pd.to_numeric(row.get("prior_turnover_median"), errors="coerce")
+    volume_value = pd.to_numeric(row.get("volume"), errors="coerce")
+    turnover = _format_turnover(turnover_value, currency)
+    prior_turnover = _format_turnover(prior_turnover_value, currency)
+    volume = f"{int(volume_value):,} 股" if pd.notna(volume_value) and volume_value >= 0 else "-"
+    if pd.notna(turnover_value) and pd.notna(prior_turnover_value) and prior_turnover_value > 0:
+        turnover_ratio = f"{float(turnover_value / prior_turnover_value):.2f}x"
+    else:
+        turnover_ratio = "-"
+
+    # 52 周高/低只有初筛候选抓得到（见 adapters.enrich_candidate_fundamentals），
+    # 样品/回测跑出来的这几列不存在或不全是 NaN —— 那就整行不显示，
+    # 而不是印一排 "-" 让人以为策略看过了。
+    week52_line = (
+        f"> 📊 **52周区间**：高 `{_format_price(row.get('week52_high'))}`"
+        f" ｜ 低 `{_format_price(row.get('week52_low'))}`"
+        f" ｜ **现价距高点** `{_format_number(row.get('pct_from_52w_high'), 1, sign=True, suffix='%')}`"
+        f" ｜ **高于低点** `{_format_number(row.get('pct_above_52w_low'), 1, sign=True, suffix='%')}`"
+    )
+    risk_line = (
+        f"> 🎲 **20日风险**：MAX `{_format_number(row.get('prior_max_return_pct'), 2, sign=True, suffix='%')}`"
+        f" ｜ 波动σ `{_format_number(row.get('prior_return_std_pct'), 2, suffix='%')}`"
+        f" ｜ 归一跌幅 z `{_format_number(row.get('drop_z'), 2)}`"
+        f" ｜ Amihud(×1e8) `{_format_amihud(row.get('prior_amihud'))}`"
+    )
+    optional_lines = []
+    if pd.notna(pd.to_numeric(row.get("week52_high"), errors="coerce")):
+        optional_lines.append(week52_line)
+    if pd.notna(pd.to_numeric(row.get("prior_max_return_pct"), errors="coerce")):
+        optional_lines.append(risk_line)
+
+    forward_lines: list[str] = []
+    for offset in range(1, int(config.get("append_forward_trading_days", 0)) + 1):
+        forward_date = row.get(f"forward_t{offset}_date")
+        forward_close = row.get(f"forward_t{offset}_close")
+        forward_return = row.get(f"forward_t{offset}_return_pct")
+        date_text = str(forward_date) if pd.notna(forward_date) else "数据不足"
+        close_text = f"{float(forward_close):.3f}".rstrip("0").rstrip(".") if pd.notna(forward_close) else "-"
+        return_text = f"{float(forward_return):+.2f}%" if pd.notna(forward_return) else "-"
+        forward_lines.append(
+            f"> ⏩ **T+{offset} ({date_text})**：收盘 `{close_text} {currency}` ｜ 当日涨跌 `{return_text}`"
+        )
+
+    market_cap_str = _format_market_cap(row.get("market_cap"), currency)
+    pe_str = _format_pe(row.get("pe"))
+    pb_str = _format_pb(row.get("pb"))
+
+    # 手机端全中文专属卡片视图
+    industry_method = str(config.get("industry_avg_method", "median")).lower()
+    if strategy_mode == "industry_lag_rebound":
+        industry_label = "行业涨幅"
+    elif industry_method == "median":
+        industry_label = "行业中位数"
+    elif industry_method == "trimmed_mean":
+        industry_label = "行业截断均值"
+    elif industry_method == "turnover_weighted":
+        industry_label = "行业加权均值"
+    else:
+        industry_label = "行业均值"
+
+    official_source_label = "恒生综合行业指数" if market_upper == "HK" else "官方行业指数"
+    source = (
+        f"（{official_source_label}）"
+        if bool(row.get("industry_data_ok", False))
+        else "（无行业数据，不判断行业关系）"
+    )
+
+    drop_window_line = (
+        [f"> 🗓️ **前天(T-2)涨跌**：`{two_days_ago_ret}`"]
+        if pd.notna(two_days_ago_value)
+        else []
+    )
+
+    if strategy_mode == "two_day_drop":
+        news_fetch_value = row.get("news_fetch_ok", True)
+        news_verified = bool(news_fetch_value) if pd.notna(news_fetch_value) else False
+        hits_value = row.get("negative_news_hits")
+        news_hits = str(hits_value).strip() if pd.notna(hits_value) else ""
+        if news_verified:
+            news_line = (
+                f"> 🔍 **新闻核实**：✅ 已核实"
+                + (f"，命中风险类别 `{news_hits}`" if news_hits else "，48 小时内无风险关键词")
+            )
+        else:
+            news_line = "> 🔍 **新闻核实**：⚠️ 未核实（舆情源抓取失败，请自行核对交易所公告）"
+        if stable:
+            three_days_ago_value = row.get("three_days_ago_return_pct")
+            three_days_ago_ret = f"{float(three_days_ago_value):+.2f}%" if pd.notna(three_days_ago_value) else "-"
+            window_lines = [
+                f"> 📉 **四日信号**：**T-3** `{three_days_ago_ret}` ｜ **T-2** `{two_days_ago_ret}`"
+                f" ｜ **T-1** `{prior_ret}` ｜ **T** `{daily_ret}` ｜ **最大跌幅** `{drop_strength}`",
+                f"> 🌊 **四日累计涨跌**：`{_format_number(row.get('stable_four_day_return_pct'), 2, sign=True, suffix='%')}`",
+            ]
+        else:
+            window_lines = [
+                f"> 📉 **三日信号**：**T-2** `{two_days_ago_ret}` ｜ **T-1** `{prior_ret}`"
+                f" ｜ **T** `{daily_ret}` ｜ **最大跌幅** `{drop_strength}`",
+            ]
+        detail_lines = [
+            f"> 🏢 **所属行业**：{industry}",
+            *window_lines,
+            f"> 💵 **成交活跃度**：今日成交额 `{turnover}` ｜ 20 日中位数 `{prior_turnover}` ｜ 基准比 `{turnover_ratio}`",
+            f"> 📈 **量能**：今日成交量 `{volume}` ｜ 近 20 日中位数的 `{vol_ratio}`",
+            news_line,
+            *optional_lines,
+            f"> ⭐ **综合评分**：**{score}**",
+        ]
+    else:
+        detail_lines = [
+            f"> 🏢 **所属行业**：{industry}",
+            f"> 📉 **两日涨跌**：**今日(T)** `{daily_ret}` ｜ **昨日(T-1)** `{prior_ret}`",
+            *drop_window_line,
+            f"> 🎯 **{industry_label}**：`{ind_avg}`{source} ｜ **落后行业**：`{lag}`",
+            f"> 📦 **策略今日成交量**：`{int(float(row['signal_day_volume'])):,} 股`" if pd.notna(row.get("signal_day_volume")) else "> 📦 **策略今日成交量**：`-`",
+            f"> 📈 **异动量比**：`{vol_ratio}` ｜ ⭐ **{score_label}**：**{score}**",
+        ]
+
+    return [
+        f"### {rank:02d}. `{code}` {name}",
+        f"> 💰 **最新现价**：`{close}` ｜ **总市值**：`{market_cap_str}`",
+        f"> 📊 **估值指标**：**PE** `{pe_str}` ｜ **PB** `{pb_str}`",
+        *detail_lines,
+        *forward_lines,
+        "",
+        "---",
+        "",
+    ]
+
+
 def format_markdown_report(
     result: pd.DataFrame,
     market: str,
     asof: str,
     config: dict[str, Any],
     tier_label: str | None = None,
+    stable_result: pd.DataFrame | None = None,
+    stable_rules: str = "",
+    stable_report_url: str = "",
 ) -> str:
     """将选股结果格式化为美观、结构清晰的 Markdown 报表。"""
     strategy_mode = str(config.get("strategy_mode", "rebound")).lower()
@@ -319,12 +574,36 @@ def format_markdown_report(
         "",
     ]
 
-    if not passed.empty:
-        passed_codes = [str(code).strip() for code in passed["code"].tolist()]
+    # 「已趋于平稳」是并列的第二条规则，放最前面。它只算一次（官方门槛那一档），
+    # 所以每档页面看到的都是同一批票；卡片编号 01..N 交给它，现规则从 N+1 接着排，
+    # 免得同一页出现两段 01。
+    stable_passed = pd.DataFrame()
+    if stable_result is not None and not stable_result.empty and "stable_passes" in stable_result.columns:
+        stable_passed = stable_result.loc[stable_result["stable_passes"]].copy()
+    stable_count = len(stable_passed)
+    if stable_count:
+        stable_label = str((config.get("stable_filter") or {}).get("label", "已趋于平稳"))
         lines.extend([
-            f"## 命中股票代码（共 {len(passed_codes)} 只）",
+            f"## 🧊 {stable_label}推荐（{stable_rules}）",
             "",
         ])
+        for rank, (_, row) in enumerate(stable_passed.iterrows(), start=1):
+            lines.extend(
+                _render_stock_card(
+                    row, rank, market, market_upper, currency, strategy_mode, config, stable=True
+                )
+            )
+
+    if not passed.empty:
+        passed_codes = [str(code).strip() for code in passed["code"].tolist()]
+        if stable_count:
+            # HTML 模板拿卡片上方最近的一个 `## ` 当分组名，所以现规则这段也得有个
+            # 自己的组标题；正好顶掉原来那句「命中股票代码」。
+            group = f"现规则 · {tier_label}" if tier_label else "现规则"
+            heading = f"## 📊 {group}（共 {len(passed_codes)} 只）"
+        else:
+            heading = f"## 命中股票代码（共 {len(passed_codes)} 只）"
+        lines.extend([heading, ""])
         for start in range(0, len(passed_codes), 8):
             code_chunk = passed_codes[start : start + 8]
             lines.append(" ｜ ".join(f"`{code}`" for code in code_chunk))
@@ -396,125 +675,12 @@ def format_markdown_report(
 
     lines.extend(["---", ""])
 
-    for rank, (_, row) in enumerate(passed.iterrows(), start=1):
-        code = str(row.get("code", "")).strip()
-        name = _clean_stock_name(code, row.get("name", ""), market)
-        official_industry = str(row.get("official_industry", "")).strip()
-        raw_industry = str(row.get("industry", "")).strip()
-        if strategy_mode == "industry_lag_rebound" and not bool(row.get("industry_data_ok", False)):
-            raw_industry = ""
-        industry = _translate_industry(raw_industry) if raw_industry else "无行业数据"
-        close = f"{float(row['close']):.3f}".rstrip("0").rstrip(".") + f" {currency}" if pd.notna(row.get("close")) else "-"
-        prior_value = row.get("yesterday_return_pct", row.get("prior_return_pct"))
-        two_days_ago_value = row.get("day_before_yesterday_return_pct", row.get("two_days_ago_return_pct"))
-        daily_value = row.get("today_return_pct", row.get("daily_return_pct"))
-        industry_value = row.get("industry_return_pct", row.get("industry_avg_return_pct"))
-        prior_ret = f"{float(prior_value):+.2f}%" if pd.notna(prior_value) else "-"
-        two_days_ago_ret = f"{float(two_days_ago_value):+.2f}%" if pd.notna(two_days_ago_value) else "-"
-        daily_ret = f"{float(daily_value):+.2f}%" if pd.notna(daily_value) else "-"
-        ind_avg = f"{float(industry_value):+.2f}%" if pd.notna(industry_value) else "-"
-        lag = f"{float(row['lag_vs_industry_pct']):+.2f}%" if pd.notna(row.get("lag_vs_industry_pct")) else "-"
-        vol_ratio = f"{float(row['volume_ratio']):.2f}x" if pd.notna(row.get("volume_ratio")) else "-"
-        score = f"{float(row['score']):.2f}" if pd.notna(row.get("score")) else "-"
-        score_label = "落后行业排序分" if strategy_mode == "industry_lag_rebound" else "综合评分"
-        drop_strength = (
-            f"−{abs(float(row['drop_strength_pct'])):.2f}%"
-            if pd.notna(row.get("drop_strength_pct"))
-            else "-"
-        )
-        turnover_value = pd.to_numeric(row.get("turnover"), errors="coerce")
-        prior_turnover_value = pd.to_numeric(row.get("prior_turnover_median"), errors="coerce")
-        volume_value = pd.to_numeric(row.get("volume"), errors="coerce")
-        turnover = _format_turnover(turnover_value, currency)
-        prior_turnover = _format_turnover(prior_turnover_value, currency)
-        volume = f"{int(volume_value):,} 股" if pd.notna(volume_value) and volume_value >= 0 else "-"
-        if pd.notna(turnover_value) and pd.notna(prior_turnover_value) and prior_turnover_value > 0:
-            turnover_ratio = f"{float(turnover_value / prior_turnover_value):.2f}x"
-        else:
-            turnover_ratio = "-"
-
-        forward_lines: list[str] = []
-        for offset in range(1, int(config.get("append_forward_trading_days", 0)) + 1):
-            forward_date = row.get(f"forward_t{offset}_date")
-            forward_close = row.get(f"forward_t{offset}_close")
-            forward_return = row.get(f"forward_t{offset}_return_pct")
-            date_text = str(forward_date) if pd.notna(forward_date) else "数据不足"
-            close_text = f"{float(forward_close):.3f}".rstrip("0").rstrip(".") if pd.notna(forward_close) else "-"
-            return_text = f"{float(forward_return):+.2f}%" if pd.notna(forward_return) else "-"
-            forward_lines.append(
-                f"> ⏩ **T+{offset} ({date_text})**：收盘 `{close_text} {currency}` ｜ 当日涨跌 `{return_text}`"
+    for rank, (_, row) in enumerate(passed.iterrows(), start=stable_count + 1):
+        lines.extend(
+            _render_stock_card(
+                row, rank, market, market_upper, currency, strategy_mode, config
             )
-
-        market_cap_str = _format_market_cap(row.get("market_cap"), currency)
-        pe_str = _format_pe(row.get("pe"))
-        pb_str = _format_pb(row.get("pb"))
-
-        # 手机端全中文专属卡片视图
-        industry_method = str(config.get("industry_avg_method", "median")).lower()
-        if strategy_mode == "industry_lag_rebound":
-            industry_label = "行业涨幅"
-        elif industry_method == "median":
-            industry_label = "行业中位数"
-        elif industry_method == "trimmed_mean":
-            industry_label = "行业截断均值"
-        elif industry_method == "turnover_weighted":
-            industry_label = "行业加权均值"
-        else:
-            industry_label = "行业均值"
-
-        official_source_label = "恒生综合行业指数" if market_upper == "HK" else "官方行业指数"
-        source = (
-            f"（{official_source_label}）"
-            if bool(row.get("industry_data_ok", False))
-            else "（无行业数据，不判断行业关系）"
         )
-
-        drop_window_line = (
-            [f"> 🗓️ **前天(T-2)涨跌**：`{two_days_ago_ret}`"]
-            if pd.notna(two_days_ago_value)
-            else []
-        )
-
-        if strategy_mode == "two_day_drop":
-            news_fetch_value = row.get("news_fetch_ok", True)
-            news_verified = bool(news_fetch_value) if pd.notna(news_fetch_value) else False
-            hits_value = row.get("negative_news_hits")
-            news_hits = str(hits_value).strip() if pd.notna(hits_value) else ""
-            if news_verified:
-                news_line = (
-                    f"> 🔍 **新闻核实**：✅ 已核实"
-                    + (f"，命中风险类别 `{news_hits}`" if news_hits else "，48 小时内无风险关键词")
-                )
-            else:
-                news_line = "> 🔍 **新闻核实**：⚠️ 未核实（舆情源抓取失败，请自行核对交易所公告）"
-            detail_lines = [
-                f"> 🏢 **所属行业**：{industry}",
-                f"> 📉 **三日信号**：**T-2** `{two_days_ago_ret}` ｜ **T-1** `{prior_ret}` ｜ **T** `{daily_ret}` ｜ **最大跌幅** `{drop_strength}`",
-                f"> 💵 **成交活跃度**：今日成交额 `{turnover}` ｜ 20 日中位数 `{prior_turnover}` ｜ 基准比 `{turnover_ratio}`",
-                f"> 📈 **量能**：今日成交量 `{volume}` ｜ 近 20 日中位数的 `{vol_ratio}`",
-                news_line,
-                f"> ⭐ **综合评分**：**{score}**",
-            ]
-        else:
-            detail_lines = [
-                f"> 🏢 **所属行业**：{industry}",
-                f"> 📉 **两日涨跌**：**今日(T)** `{daily_ret}` ｜ **昨日(T-1)** `{prior_ret}`",
-                *drop_window_line,
-                f"> 🎯 **{industry_label}**：`{ind_avg}`{source} ｜ **落后行业**：`{lag}`",
-                f"> 📦 **策略今日成交量**：`{int(float(row['signal_day_volume'])):,} 股`" if pd.notna(row.get("signal_day_volume")) else "> 📦 **策略今日成交量**：`-`",
-                f"> 📈 **异动量比**：`{vol_ratio}` ｜ ⭐ **{score_label}**：**{score}**",
-            ]
-
-        lines.extend([
-            f"### {rank:02d}. `{code}` {name}",
-            f"> 💰 **最新现价**：`{close}` ｜ **总市值**：`{market_cap_str}`",
-            f"> 📊 **估值指标**：**PE** `{pe_str}` ｜ **PB** `{pb_str}`",
-            *detail_lines,
-            *forward_lines,
-            "",
-            "---",
-            "",
-        ])
 
     risk_note = (
         "> ⚠️ *风险提示：以上结果仅依据配置的行业与个股收盘涨跌幅条件生成，不构成投资建议。*"
