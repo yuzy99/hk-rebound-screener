@@ -306,13 +306,15 @@ def format_daily_push(
                 row, rank, market, market_upper, currency, strategy_mode, config, stable=True
             )
         )
-    hidden = [str(code).strip() for code in stable_passed["code"].tolist()[len(shown) :]]
-    if hidden:
-        lines.append(f"> 其余 {len(hidden)} 只见完整报告：")
-        lines.extend(_format_code_chunks(hidden))
-        lines.append("")
+    # 卡片之后把全部命中代码再列一遍，排版与现规则各档一致。
+    # 卡片受 push_max_cards 截断，这份列表不截断 —— 于是它同时承担了
+    # 「哪些没展开」的说明，不必再单独写一行「其余 N 只」。
+    codes = [str(code).strip() for code in stable_passed["code"].tolist()]
+    lines.append(f"【{label}】命中股票代码（共 {len(codes)} 只）")
+    lines.extend(_format_code_chunks(codes))
     if stable_report_url:
-        lines.extend([f"🔗 完整报告：{stable_report_url}", ""])
+        lines.append(f"🔗 完整报告：{stable_report_url}")
+    lines.append("")
 
     return "\n".join([header, "", *lines, remainder.lstrip("\n")])
 

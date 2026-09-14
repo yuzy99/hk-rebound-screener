@@ -366,7 +366,8 @@ def test_daily_push_without_stable_result_is_the_plain_tier_message() -> None:
     )
 
 
-def test_daily_push_lists_the_codes_beyond_the_card_limit() -> None:
+def test_daily_push_lists_every_stable_code_after_the_cards() -> None:
+    """正文里除卡片外还要有一份完整代码列表，且不跟着 push_max_cards 截断。"""
     config = _us_config()
     frame = _fixture(config)
     config["stable_filter"] = {**config["stable_filter"], "push_max_cards": 2}
@@ -377,12 +378,16 @@ def test_daily_push_lists_the_codes_beyond_the_card_limit() -> None:
         stable_result=frame, stable_rules="规则", stable_report_url="https://x.test/us_200m.html",
     )
 
-    shown, _ = _cards_before_and_after(content, "🔗 完整报告")
+    shown, _ = _cards_before_and_after(content, "【已趋于平稳】命中股票代码")
     assert [int(number) for number, _ in shown] == [1, 2]
 
     stable_codes = set(frame.loc[frame["stable_passes"].astype(bool), "code"].astype(str))
-    hidden = stable_codes - {code for _, code in shown}
-    # 新规则命中 3 只，卡片只展开 2 张，剩下那只也得用代码列出来
-    assert len(hidden) == 1
-    assert "其余 1 只见完整报告：" in content
-    assert f"`{hidden.pop()}`" in content
+    assert len(stable_codes) == 3
+
+    # 列表在卡片之后、报告链接之前，且列出全部 3 只（卡片只展开 2 张）
+    list_start = content.index("【已趋于平稳】命中股票代码（共 3 只）")
+    list_end = content.index("🔗 完整报告：https://x.test/us_200m.html")
+    assert content.index("### 02. ") < list_start < list_end
+
+    listed = set(re.findall(r"`([A-Za-z0-9._-]+)`", content[list_start:list_end]))
+    assert listed == stable_codes
