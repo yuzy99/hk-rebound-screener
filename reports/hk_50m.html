@@ -1,0 +1,943 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>港股（50M 流动性门槛）市场选股简报</title>
+  
+  <!-- Fonts: Plus Jakarta Sans for UI, JetBrains Mono for financial data -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  
+  <!-- Tailwind CSS via CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <!-- Tailwind Configuration -->
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['"Plus Jakarta Sans"', 'system-ui', 'sans-serif'],
+            mono: ['"JetBrains Mono"', 'monospace'],
+          },
+          colors: {
+            zinc: {
+              50: '#fafafa',
+              100: '#f4f4f5',
+              200: '#e4e4e7',
+              300: '#d4d4d8',
+              400: '#a1a1aa',
+              500: '#71717a',
+              600: '#52525b',
+              700: '#3f3f46',
+              800: '#27272a',
+              900: '#18181b',
+              950: '#09090b',
+            }
+          }
+        }
+      }
+    }
+  </script>
+
+  <!-- Lucide Icons via CDN -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  
+  <style>
+    body { 
+      background-color: #fafafa; /* zinc-50 */
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+    
+    /* Hide scrollbar for cleaner look on mobile */
+    ::-webkit-scrollbar { width: 0px; background: transparent; }
+    
+    /* Entrance animation */
+    .fade-in {
+      animation: fadeIn 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+      opacity: 0;
+      transform: translateY(16px);
+    }
+    @keyframes fadeIn {
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    /* CSS Grid Accordion for buttery smooth height transitions */
+    .accordion-content {
+      display: grid;
+      grid-template-rows: 0fr;
+      transition: grid-template-rows 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .accordion-content.open {
+      grid-template-rows: 1fr;
+    }
+    .accordion-inner {
+      overflow: hidden;
+    }
+
+    /* Custom input focus reset */
+    input[type="search"]::-webkit-search-cancel-button {
+      -webkit-appearance: none;
+    }
+  </style>
+</head>
+<body class="text-zinc-900 selection:bg-zinc-200">
+
+  <!-- App Container -->
+  <div id="app" class="max-w-md mx-auto pb-12 min-h-screen relative flex flex-col">
+    
+    <!-- Header Area -->
+    <header class="sticky top-0 z-20 bg-zinc-50/80 backdrop-blur-xl pt-6 pb-4 px-5 border-b border-zinc-200/60">
+      <div class="flex items-end justify-between mb-5">
+        <div>
+          <h1 class="text-2xl font-extrabold tracking-tight text-zinc-950">港股（50M 流动性门槛）<br/>市场选股简报</h1>
+        </div>
+        <div class="flex items-center gap-2 mb-1">
+          <span class="relative flex h-2.5 w-2.5">
+            <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+            <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
+          </span>
+          <span id="count-badge" class="font-mono text-xs font-bold text-zinc-500">
+            --
+          </span>
+        </div>
+      </div>
+      
+      <!-- Search Input -->
+      <div class="relative group">
+        <div class="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+          <i data-lucide="search" class="w-4 h-4 text-zinc-400 group-focus-within:text-zinc-900 transition-colors"></i>
+        </div>
+        <input 
+          type="search" 
+          id="search-input" 
+          placeholder="搜索股票代码或行业..."
+          class="w-full bg-white border border-zinc-200/80 rounded-[16px] py-3.5 pl-11 pr-4 text-sm font-semibold text-zinc-900 placeholder:text-zinc-400 focus:outline-none focus:ring-4 focus:ring-zinc-900/5 focus:border-zinc-400 transition-all shadow-sm"
+        >
+      </div>
+    </header>
+
+    <!-- Current scoring model -->
+    <section class="mx-4 mt-5 rounded-[20px] border border-zinc-200/70 bg-white p-4 shadow-[0_2px_12px_-4px_rgba(0,0,0,0.03)]">
+      <div class="flex items-center justify-between gap-3">
+        <div class="flex items-center gap-2">
+          <i data-lucide="calculator" class="w-4 h-4 text-zinc-400"></i>
+          <h2 class="text-sm font-extrabold text-zinc-900">当前评分公式</h2>
+        </div>
+        <span class="rounded-md bg-zinc-100 px-2 py-1 text-[9px] font-extrabold tracking-widest text-zinc-500">待回测参数</span>
+      </div>
+      <div class="mt-3 overflow-x-auto rounded-xl bg-zinc-950 px-3 py-3 font-mono text-[12px] font-bold leading-relaxed text-white">
+        S = min(D, 15) + 2 × log₂(min(max(R, 1), 8)) + 2.5 × log₁₀(min(max(L, 1), 1000)) − N
+      </div>
+      <p class="mt-3 text-[11px] font-medium leading-relaxed text-zinc-500">
+        D 为最近三日最大跌幅绝对值（百分点，最高 15 分；该项权重为正，跌得越深得分越高）；R 为有效量比，1 倍以下不加分、8 倍封顶；L 为 20 日中位成交额相对流动性门槛的倍数，1 倍以下不加分、1000 倍封顶；N 为近 48 小时按风险类别去重后的新闻风险分。
+      </p>
+    </section>
+
+    <!-- Content Area -->
+    <main id="list-container" class="px-4 py-5 flex flex-col gap-5 flex-1">
+      <!-- Cards will be injected here -->
+    </main>
+  </div>
+
+  <!-- Raw Markdown Data Placeholder -->
+  <!-- ⚠️ USER INSTRUCTION: Paste your full 144 stocks data inside this script tag ⚠️ -->
+  <script type="text/markdown" id="raw-data">
+## 📊 HK 市场选股简报 (2026-09-14) · 50M 流动性门槛
+
+## 命中股票代码（共 33 只）
+
+`02889` ｜ `02706` ｜ `00100` ｜ `09678` ｜ `01164` ｜ `01651` ｜ `01952` ｜ `06082`
+`03317` ｜ `06809` ｜ `02865` ｜ `00960` ｜ `02556` ｜ `02475` ｜ `09880` ｜ `09688`
+`02590` ｜ `01384` ｜ `02718` ｜ `00522` ｜ `09696` ｜ `06651` ｜ `02631` ｜ `06682`
+`01918` ｜ `02600` ｜ `02432` ｜ `03296` ｜ `01989` ｜ `00975` ｜ `00340` ｜ `03800`
+`01258`
+
+- **运行策略**：三日下跌+流动性策略 (`two_day_drop`)
+- **扫描基准日期**：`2026-09-14`
+- **命中符合条件标的**：**33** 只
+
+- **三日筛选规则**：最近三个交易日中至少一日跌幅 ≤ −4.5%，其余两日涨跌幅均 ≤ +1.5%
+- **流动性门槛**：今日成交额 ≥ HK$2.00m，过去 20 日中位成交额 ≥ HK$50.00m，有效成交天数 ≥ 12 天
+- **新闻门槛**：风险分 < 10 分即保留（单类命中只扣分，不再一票否决）
+- **评分公式**：`S = min(D, 15) + 2 × log₂(min(max(R, 1), 8)) + 2.5 × log₁₀(min(max(L, 1), 1000)) − N`
+- **评分定义**：`D` 为最近三日最大跌幅绝对值（百分点，最高 15 分）；该项权重为正，跌得越深得分越高；`R` 为有效量比（1 倍以下不加分，8 倍封顶）；`L` 为 20 日中位成交额相对流动性门槛的倍数（1 倍以下不加分，1000 倍封顶；基准固定为官方门槛，不随档位变化）；`N` 为 48 小时内按风险类别去重后的新闻风险分（累计到 10 分才淘汰，未达则仅扣分）。
+
+---
+
+### 01. `02889` 博泰车联
+> 💰 **最新现价**：`84.2 HKD` ｜ **总市值**：`140.37 亿 HKD`
+> 📊 **估值指标**：**PE** `-` ｜ **PB** `-`
+> 🏢 **所属行业**：Software—Application
+> 📉 **三日信号**：**T-2** `-8.99%` ｜ **T-1** `-12.68%` ｜ **T** `-3.33%` ｜ **最大跌幅** `−12.68%`
+> 💵 **成交活跃度**：今日成交额 `HK$66.38m` ｜ 20 日中位数 `HK$81.42m` ｜ 基准比 `0.82x`
+> 📈 **量能**：今日成交量 `810,780 股` ｜ 近 20 日中位数的 `1.53x`
+> 🔍 **新闻核实**：✅ 已核实，48 小时内无风险关键词
+> 📊 **52周区间**：高 `288.8` ｜ 低 `85.8` ｜ **现价距高点** `-70.8%` ｜ **高于低点** `-1.9%`
+> 🎲 **20日风险**：MAX `+5.81%` ｜ 波动σ `5.41%` ｜ 归一跌幅 z `2.67` ｜ Amihud(×1e8) `5.22`
+> ⭐ **综合评分**：**13.91**
+
+---
+
+### 02. `02706` 海致科技集团
+> 💰 **最新现价**：`40.28 HKD` ｜ **总市值**：`162.82 亿 HKD`
+> 📊 **估值指标**：**PE** `-` ｜ **PB** `-`
+> 🏢 **所属行业**：Software—Infrastructure
+> 📉 **三日信号**：**T-2** `-12.75%` ｜ **T-1** `-6.34%` ｜ **T** `-3.36%` ｜ **最大跌幅** `−12.75%`
+> 💵 **成交活跃度**：今日成交额 `HK$50.26m` ｜ 20 日中位数 `HK$141.06m` ｜ 基准比 `0.36x`
+> 📈 **量能**：今日成交量 `1,268,800 股` ｜ 近 20 日中位数的 `0.43x`
+> 🔍 **新闻核实**：✅ 已核实，48 小时内无风险关键词
+> 📊 **52周区间**：高 `161.6` ｜ 低 `21.44` ｜ **现价距高点** `-75.1%` ｜ **高于低点** `+87.9%`
+> 🎲 **20日风险**：MAX `+15.19%` ｜ 波动σ `7.01%` ｜ 归一跌幅 z `1.85` ｜ Amihud(×1e8) `3.11`
+> ⭐ **综合评分**：**12.75**
+
+---
+
+### 03. `00100` MINIMAX-W
+> 💰 **最新现价**：`252.4 HKD` ｜ **总市值**：`881.47 亿 HKD`
+> 📊 **估值指标**：**PE** `-` ｜ **PB** `-`
+> 🏢 **所属行业**：Software—Infrastructure
+> 📉 **三日信号**：**T-2** `-8.98%` ｜ **T-1** `-7.53%` ｜ **T** `-6.52%` ｜ **最大跌幅** `−8.98%`
+> 💵 **成交活跃度**：今日成交额 `HK$2.43b` ｜ 20 日中位数 `HK$4.44b` ｜ 基准比 `0.55x`
+> 📈 **量能**：今日成交量 `9,599,572 股` ｜ 近 20 日中位数的 `0.66x`
+> 🔍 **新闻核实**：✅ 已核实，48 小时内无风险关键词
+> 📊 **52周区间**：高 `1330` ｜ 低 `186.2` ｜ **现价距高点** `-81.0%` ｜ **高于低点** `+35.6%`
+> 🎲 **20日风险**：MAX `+16.18%` ｜ 波动σ `6.85%` ｜ 归一跌幅 z `1.94` ｜ Amihud(×1e8) `0.12`
+> ⭐ **综合评分**：**12.34**
+
+---
+
+### 04. `09678` 云知声
+> 💰 **最新现价**：`70.1 HKD` ｜ **总市值**：`50.45 亿 HKD`
+> 📊 **估值指标**：**PE** `-` ｜ **PB** `-`
+> 🏢 **所属行业**：Software—Infrastructure
+> 📉 **三日信号**：**T-2** `-10.03%` ｜ **T-1** `-8.28%` ｜ **T** `-2.64%` ｜ **最大跌幅** `−10.03%`
+> 💵 **成交活跃度**：今日成交额 `HK$117.36m` ｜ 20 日中位数 `HK$155.00m` ｜ 基准比 `0.76x`
+> 📈 **量能**：今日成交量 `1,682,060 股` ｜ 近 20 日中位数的 `0.76x`
+> 🔍 **新闻核实**：✅ 已核实，48 小时内无风险关键词
+> 📊 **52周区间**：高 `657.5` ｜ 低 `61` ｜ **现价距高点** `-89.3%` ｜ **高于低点** `+14.9%`
+> 🎲 **20日风险**：MAX `+17.69%` ｜ 波动σ `7.29%` ｜ 归一跌幅 z `1.66` ｜ Amihud(×1e8) `3.86`
+> ⭐ **综合评分**：**10.03**
+
+---
+
+### 05. `01164` 中广核矿业
+> 💰 **最新现价**：`2.135 HKD` ｜ **总市值**：`162.27 亿 HKD`
+> 📊 **估值指标**：**PE** `-` ｜ **PB** `-`
+> 🏢 **所属行业**：Uranium
+> 📉 **三日信号**：**T-2** `-8.08%` ｜ **T-1** `-4.60%` ｜ **T** `-6.36%` ｜ **最大跌幅** `−8.08%`
+> 💵 **成交活跃度**：今日成交额 `HK$180.20m` ｜ 20 日中位数 `HK$117.29m` ｜ 基准比 `1.54x`
+> 📈 **量能**：今日成交量 `83,603,764 股` ｜ 近 20 日中位数的 `1.80x`
+> 🔍 **新闻核实**：✅ 已核实，48 小时内无风险关键词
+> 📊 **52周区间**：高 `5.66` ｜ 低 `2.07` ｜ **现价距高点** `-62.3%` ｜ **高于低点** `+3.1%`
+> 🎲 **20日风险**：MAX `+9.19%` ｜ 波动σ `4.80%` ｜ 归一跌幅 z `2.29` ｜ Amihud(×1e8) `3.02`
+> ⭐ **综合评分**：**9.78**
+
+---
+
+### 06. `01651` 津上机床中国
+> 💰 **最新现价**：`47.88 HKD` ｜ **总市值**：`176.49 亿 HKD`
+> 📊 **估值指标**：**PE** `-` ｜ **PB** `-`
+> 🏢 **所属行业**：Tools & Accessories
+> 📉 **三日信号**：**T-2** `-6.45%` ｜ **T-1** `+1.35%` ｜ **T** `-4.72%` ｜ **最大跌幅** `−6.45%`
+> 💵 **成交活跃度**：今日成交额 `HK$174.97m` ｜ 20 日中位数 `HK$68.45m` ｜ 基准比 `2.56x`
+> 📈 **量能**：今日成交量 `3,633,564 股` ｜ 近 20 日中位数的 `2.82x`
+> 🔍 **新闻核实**：✅ 已核实，48 小时内无风险关键词
+> 📊 **52周区间**：高 `74.15` ｜ 低 `28.8` ｜ **现价距高点** `-35.4%` ｜ **高于低点** `+66.3%`
+> 🎲 **20日风险**：MAX `+5.79%` ｜ 波动σ `4.17%` ｜ 归一跌幅 z `1.36` ｜ Amihud(×1e8) `4.06`
+> ⭐ **综合评分**：**9.44**
+
+---
+
+### 07. `01952` 云顶新耀
+> 💰 **最新现价**：`27.12 HKD` ｜ **总市值**：`95.72 亿 HKD`
+> 📊 **估值指标**：**PE** `-` ｜ **PB** `-`
+> 🏢 **所属行业**：生物科技与基因
+> 📉 **三日信号**：**T-2** `-8.52%` ｜ **T-1** `-6.09%` ｜ **T** `+1.12%` ｜ **最大跌幅** `−8.52%`
+> 💵 **成交活跃度**：今日成交额 `HK$167.22m` ｜ 20 日中位数 `HK$332.42m` ｜ 基准比 `0.50x`
+> 📈 **量能**：今日成交量 `6,127,000 股` ｜ 近 20 日中位数的 `0.60x`
+> 🔍 **新闻核实**：✅ 已核实，48 小时内无风险关键词
+> 📊 **52周区间**：高 `60.8` ｜ 低 `22.7` ｜ **现价距高点** `-55.4%` ｜ **高于低点** `+19.5%`
+> 🎲 **20日风险**：MAX `+41.43%` ｜ 波动σ `12.04%` ｜ 归一跌幅 z `0.65` ｜ Amihud(×1e8) `1.51`
+> ⭐ **综合评分**：**9.07**
+
+---
+
+### 08. `06082` 壁仞科技
+> 💰 **最新现价**：`33.1 HKD` ｜ **总市值**：`857.91 亿 HKD`
+> 📊 **估值指标**：**PE** `31.6x` ｜ **PB** `6.87x`
+> 🏢 **所属行业**：半导体芯片
+> 📉 **三日信号**：**T-2** `-1.94%` ｜ **T-1** `-5.39%` ｜ **T** `-6.66%` ｜ **最大跌幅** `−6.66%`
+> 💵 **成交活跃度**：今日成交额 `HK$474.29m` ｜ 20 日中位数 `HK$422.90m` ｜ 基准比 `1.12x`
+> 📈 **量能**：今日成交量 `14,167,295 股` ｜ 近 20 日中位数的 `1.26x`
+> 🔍 **新闻核实**：✅ 已核实，48 小时内无风险关键词
+> 📊 **52周区间**：高 `70.75` ｜ 低 `27.32` ｜ **现价距高点** `-53.2%` ｜ **高于低点** `+21.2%`
+> 🎲 **20日风险**：MAX `+18.81%` ｜ 波动σ `6.56%` ｜ 归一跌幅 z `1.23` ｜ Amihud(×1e8) `0.99`
+> ⭐ **综合评分**：**8.13**
+
+---
+
+### 09. `03317` 迅策
+> 💰 **最新现价**：`93.7 HKD` ｜ **总市值**：`309.19 亿 HKD`
+> 📊 **估值指标**：**PE** `425.9x` ｜ **PB** `10.66x`
+> 🏢 **所属行业**：IT 咨询与服务
+> 📉 **三日信号**：**T-2** `-5.50%` ｜ **T-1** `-5.16%` ｜ **T** `-7.23%` ｜ **最大跌幅** `−7.23%`
+> 💵 **成交活跃度**：今日成交额 `HK$211.07m` ｜ 20 日中位数 `HK$232.58m` ｜ 基准比 `0.91x`
+> 📈 **量能**：今日成交量 `2,189,687 股` ｜ 近 20 日中位数的 `1.14x`
+> 🔍 **新闻核实**：✅ 已核实，48 小时内无风险关键词
+> 📊 **52周区间**：高 `382.8` ｜ 低 `38.02` ｜ **现价距高点** `-75.5%` ｜ **高于低点** `+146.4%`
+> 🎲 **20日风险**：MAX `+7.78%` ｜ 波动σ `4.92%` ｜ 归一跌幅 z `2.10` ｜ Amihud(×1e8) `1.64`
+> ⭐ **综合评分**：**7.77**
+
+---
+
+### 10. `06809` 澜起科技
+> 💰 **最新现价**：`243 HKD` ｜ **总市值**：`2965.91 亿 HKD`
+> 📊 **估值指标**：**PE** `79.9x` ｜ **PB** `11.69x`
+> 🏢 **所属行业**：半导体芯片
+> 📉 **三日信号**：**T-2** `-0.37%` ｜ **T-1** `-4.59%` ｜ **T** `-5.81%` ｜ **最大跌幅** `−5.81%`
+> 💵 **成交活跃度**：今日成交额 `HK$565.96m` ｜ 20 日中位数 `HK$761.14m` ｜ 基准比 `0.74x`
+> 📈 **量能**：今日成交量 `2,287,711 股` ｜ 近 20 日中位数的 `0.82x`
+> 🔍 **新闻核实**：✅ 已核实，48 小时内无风险关键词
+> 📊 **52周区间**：高 `543` ｜ 低 `152.7` ｜ **现价距高点** `-55.2%` ｜ **高于低点** `+59.1%`
+> 🎲 **20日风险**：MAX `+12.30%` ｜ 波动σ `5.46%` ｜ 归一跌幅 z `1.14` ｜ Amihud(×1e8) `0.43`
+> ⭐ **综合评分**：**7.27**
+
+---
+
+### 11. `02865` 钧达股份
+> 💰 **最新现价**：`11.78 HKD` ｜ **总市值**：`36.67 亿 HKD`
+> 📊 **估值指标**：**PE** `-` ｜ **PB** `0.82x`
+> 🏢 **所属行业**：光伏太阳能
+> 📉 **三日信号**：**T-2** `-7.21%` ｜ **T-1** `-6.44%` ｜ **T** `-1.17%` ｜ **最大跌幅** `−7.21%`
+> 💵 **成交活跃度**：今日成交额 `HK$32.84m` ｜ 20 日中位数 `HK$50.51m` ｜ 基准比 `0.65x`
+> 📈 **量能**：今日成交量 `2,735,700 股` ｜ 近 20 日中位数的 `0.87x`
+> 🔍 **新闻核实**：✅ 已核实，48 小时内无风险关键词
+> 📊 **52周区间**：高 `52.6` ｜ 低 `11.8` ｜ **现价距高点** `-77.6%` ｜ **高于低点** `-0.2%`
+> 🎲 **20日风险**：MAX `+5.97%` ｜ 波动σ `3.49%` ｜ 归一跌幅 z `2.45` ｜ Amihud(×1e8) `5.65`
+> ⭐ **综合评分**：**7.21**
+
+---
+
+### 12. `00960` 龙湖集团
+> 💰 **最新现价**：`5.375 HKD` ｜ **总市值**：`370.04 亿 HKD`
+> 📊 **估值指标**：**PE** `9.1x` ｜ **PB** `0.19x`
+> 🏢 **所属行业**：Real Estate—Development
+> 📉 **三日信号**：**T-2** `-1.48%` ｜ **T-1** `-5.42%` ｜ **T** `-5.20%` ｜ **最大跌幅** `−5.42%`
+> 💵 **成交活跃度**：今日成交额 `HK$186.79m` ｜ 20 日中位数 `HK$120.13m` ｜ 基准比 `1.55x`
+> 📈 **量能**：今日成交量 `34,299,680 股` ｜ 近 20 日中位数的 `1.80x`
+> 🔍 **新闻核实**：✅ 已核实，48 小时内无风险关键词
+> 📊 **52周区间**：高 `12.24` ｜ 低 `5.67` ｜ **现价距高点** `-56.1%` ｜ **高于低点** `-5.2%`
+> 🎲 **20日风险**：MAX `+8.40%` ｜ 波动σ `3.85%` ｜ 归一跌幅 z `1.81` ｜ Amihud(×1e8) `2.20`
+> ⭐ **综合评分**：**7.12**
+
+---
+
+### 13. `02556` 迈富时
+> 💰 **最新现价**：`52.2 HKD` ｜ **总市值**：`139.76 亿 HKD`
+> 📊 **估值指标**：**PE** `44.6x` ｜ **PB** `4.72x`
+> 🏢 **所属行业**：Software—Application
+> 📉 **三日信号**：**T-2** `-5.40%` ｜ **T-1** `-6.15%` ｜ **T** `-2.25%` ｜ **最大跌幅** `−6.15%`
+> 💵 **成交活跃度**：今日成交额 `HK$200.42m` ｜ 20 日中位数 `HK$353.38m` ｜ 基准比 `0.57x`
+> 📈 **量能**：今日成交量 `3,783,170 股` ｜ 近 20 日中位数的 `0.60x`
+> 🔍 **新闻核实**：✅ 已核实，48 小时内无风险关键词
+> 📊 **52周区间**：高 `68.3` ｜ 低 `27.36` ｜ **现价距高点** `-23.6%` ｜ **高于低点** `+90.8%`
+> 🎲 **20日风险**：MAX `+13.52%` ｜ 波动σ `6.81%` ｜ 归一跌幅 z `1.17` ｜ Amihud(×1e8) `1.28`
+> ⭐ **综合评分**：**6.77**
+
+---
+
+### 14. `02475` 立讯精密
+> 💰 **最新现价**：`57 HKD` ｜ **总市值**：`4410.59 亿 HKD`
+> 📊 **估值指标**：**PE** `20.4x` ｜ **PB** `3.80x`
+> 🏢 **所属行业**：电子元器件
+> 📉 **三日信号**：**T-2** `-5.98%` ｜ **T-1** `+1.37%` ｜ **T** `-3.39%` ｜ **最大跌幅** `−5.98%`
+> 💵 **成交活跃度**：今日成交额 `HK$233.35m` ｜ 20 日中位数 `HK$194.19m` ｜ 基准比 `1.20x`
+> 📈 **量能**：今日成交量 `4,090,314 股` ｜ 近 20 日中位数的 `1.27x`
+> 🔍 **新闻核实**：✅ 已核实，48 小时内无风险关键词
+> 📊 **52周区间**：高 `66.2` ｜ 低 `50.95` ｜ **现价距高点** `-13.9%` ｜ **高于低点** `+11.9%`
+> 🎲 **20日风险**：MAX `+6.65%` ｜ 波动σ `3.46%` ｜ 归一跌幅 z `1.33` ｜ Amihud(×1e8) `1.47`
+> ⭐ **综合评分**：**6.67**
+
+---
+
+### 15. `09880` 优必选
+> 💰 **最新现价**：`78.9 HKD` ｜ **总市值**：`397.18 亿 HKD`
+> 📊 **估值指标**：**PE** `55.6x` ｜ **PB** `4.87x`
+> 🏢 **所属行业**：专用工业机械
+> 📉 **三日信号**：**T-2** `-5.79%` ｜ **T-1** `-3.29%` ｜ **T** `+1.22%` ｜ **最大跌幅** `−5.79%`
+> 💵 **成交活跃度**：今日成交额 `HK$298.37m` ｜ 20 日中位数 `HK$433.64m` ｜ 基准比 `0.69x`
+> 📈 **量能**：今日成交量 `3,777,843 股` ｜ 近 20 日中位数的 `0.69x`
+> 🔍 **新闻核实**：✅ 已核实，48 小时内无风险关键词
+> 📊 **52周区间**：高 `161` ｜ 低 `74.4` ｜ **现价距高点** `-51.0%` ｜ **高于低点** `+6.0%`
+> 🎲 **20日风险**：MAX `+8.28%` ｜ 波动σ `4.01%` ｜ 归一跌幅 z `1.13` ｜ Amihud(×1e8) `0.59`
+> ⭐ **综合评分**：**6.63**
+
+---
+
+### 16. `09688` 再鼎医药
+> 💰 **最新现价**：`18.96 HKD` ｜ **总市值**：`212.86 亿 HKD`
+> 📊 **估值指标**：**PE** `亏损(<0)` ｜ **PB** `4.47x`
+> 🏢 **所属行业**：生物科技与基因
+> 📉 **三日信号**：**T-2** `-6.15%` ｜ **T-1** `+0.91%` ｜ **T** `+0.11%` ｜ **最大跌幅** `−6.15%`
+> 💵 **成交活跃度**：今日成交额 `HK$91.84m` ｜ 20 日中位数 `HK$156.04m` ｜ 基准比 `0.59x`
+> 📈 **量能**：今日成交量 `4,856,200 股` ｜ 近 20 日中位数的 `0.63x`
+> 🔍 **新闻核实**：✅ 已核实，48 小时内无风险关键词
+> 📊 **52周区间**：高 `27.28` ｜ 低 `12.31` ｜ **现价距高点** `-30.5%` ｜ **高于低点** `+54.0%`
+> 🎲 **20日风险**：MAX `+5.45%` ｜ 波动σ `3.25%` ｜ 归一跌幅 z `0.91` ｜ Amihud(×1e8) `1.78`
+> ⭐ **综合评分**：**6.15**
+
+---
+
+### 17. `02590` 极智嘉－Ｗ
+> 💰 **最新现价**：`8.37 HKD` ｜ **总市值**：`185.36 亿 HKD`
+> 📊 **估值指标**：**PE** `209.2x` ｜ **PB** `2.98x`
+> 🏢 **所属行业**：Software—Application
+> 📉 **三日信号**：**T-2** `-5.51%` ｜ **T-1** `-0.96%` ｜ **T** `-4.34%` ｜ **最大跌幅** `−5.51%`
+> 💵 **成交活跃度**：今日成交额 `HK$104.44m` ｜ 20 日中位数 `HK$101.71m` ｜ 基准比 `1.03x`
+> 📈 **量能**：今日成交量 `12,381,000 股` ｜ 近 20 日中位数的 `1.24x`
+> 🔍 **新闻核实**：✅ 已核实，48 小时内无风险关键词
+> 📊 **52周区间**：高 `33.9` ｜ 低 `8.52` ｜ **现价距高点** `-75.3%` ｜ **高于低点** `-1.8%`
+> 🎲 **20日风险**：MAX `+7.58%` ｜ 波动σ `4.20%` ｜ 归一跌幅 z `1.49` ｜ Amihud(×1e8) `3.37`
+> ⭐ **综合评分**：**6.12**
+
+---
+
+### 18. `01384` 滴普科技
+> 💰 **最新现价**：`30.84 HKD` ｜ **总市值**：`107.59 亿 HKD`
+> 📊 **估值指标**：**PE** `59.1x` ｜ **PB** `7.70x`
+> 🏢 **所属行业**：Software—Application
+> 📉 **三日信号**：**T-2** `-6.05%` ｜ **T-1** `-4.91%` ｜ **T** `-0.52%` ｜ **最大跌幅** `−6.05%`
+> 💵 **成交活跃度**：今日成交额 `HK$74.23m` ｜ 20 日中位数 `HK$138.37m` ｜ 基准比 `0.54x`
+> 📈 **量能**：今日成交量 `2,399,600 股` ｜ 近 20 日中位数的 `0.58x`
+> 🔍 **新闻核实**：✅ 已核实，48 小时内无风险关键词
+> 📊 **52周区间**：高 `128.2` ｜ 低 `28.28` ｜ **现价距高点** `-75.9%` ｜ **高于低点** `+9.1%`
+> 🎲 **20日风险**：MAX `+12.52%` ｜ 波动σ `4.23%` ｜ 归一跌幅 z `1.57` ｜ Amihud(×1e8) `2.88`
+> ⭐ **综合评分**：**6.05**
+
+---
+
+### 19. `02718` 明略科技－Ｗ
+> 💰 **最新现价**：`42.26 HKD` ｜ **总市值**：`64.61 亿 HKD`
+> 📊 **估值指标**：**PE** `亏损(<0)` ｜ **PB** `2.21x`
+> 🏢 **所属行业**：Software—Infrastructure
+> 📉 **三日信号**：**T-2** `-5.69%` ｜ **T-1** `-4.17%` ｜ **T** `-2.13%` ｜ **最大跌幅** `−5.69%`
+> 💵 **成交活跃度**：今日成交额 `HK$66.57m` ｜ 20 日中位数 `HK$209.60m` ｜ 基准比 `0.32x`
+> 📈 **量能**：今日成交量 `1,583,837 股` ｜ 近 20 日中位数的 `0.35x`
+> 🔍 **新闻核实**：✅ 已核实，48 小时内无风险关键词
+> 📊 **52周区间**：高 `357` ｜ 低 `23.86` ｜ **现价距高点** `-88.2%` ｜ **高于低点** `+77.1%`
+> 🎲 **20日风险**：MAX `+21.25%` ｜ 波动σ `8.60%` ｜ 归一跌幅 z `0.81` ｜ Amihud(×1e8) `3.47`
+> ⭐ **综合评分**：**5.74**
+
+---
+
+### 20. `00522` ASMPT
+> 💰 **最新现价**：`154.3 HKD` ｜ **总市值**：`647.12 亿 HKD`
+> 📊 **估值指标**：**PE** `41.1x` ｜ **PB** `3.74x`
+> 🏢 **所属行业**：半导体设备与材料
+> 📉 **三日信号**：**T-2** `-2.37%` ｜ **T-1** `-1.94%` ｜ **T** `-4.64%` ｜ **最大跌幅** `−4.64%`
+> 💵 **成交活跃度**：今日成交额 `HK$370.00m` ｜ 20 日中位数 `HK$351.50m` ｜ 基准比 `1.05x`
+> 📈 **量能**：今日成交量 `2,375,358 股` ｜ 近 20 日中位数的 `1.11x`
+> 🔍 **新闻核实**：✅ 已核实，48 小时内无风险关键词
+> 📊 **52周区间**：高 `244.4` ｜ 低 `68.9` ｜ **现价距高点** `-36.9%` ｜ **高于低点** `+123.9%`
+> 🎲 **20日风险**：MAX `+5.74%` ｜ 波动σ `3.58%` ｜ 归一跌幅 z `1.44` ｜ Amihud(×1e8) `0.81`
+> ⭐ **综合评分**：**5.54**
+
+---
+
+### 21. `09696` 天齐锂业
+> 💰 **最新现价**：`31.78 HKD` ｜ **总市值**：`544.46 亿 HKD`
+> 📊 **估值指标**：**PE** `10.1x` ｜ **PB** `0.96x`
+> 🏢 **所属行业**：精细特种化学品
+> 📉 **三日信号**：**T-2** `-3.61%` ｜ **T-1** `-5.47%` ｜ **T** `-0.13%` ｜ **最大跌幅** `−5.47%`
+> 💵 **成交活跃度**：今日成交额 `HK$89.56m` ｜ 20 日中位数 `HK$154.44m` ｜ 基准比 `0.58x`
+> 📈 **量能**：今日成交量 `2,796,620 股` ｜ 近 20 日中位数的 `0.67x`
+> 🔍 **新闻核实**：✅ 已核实，48 小时内无风险关键词
+> 📊 **52周区间**：高 `69.15` ｜ 低 `30.24` ｜ **现价距高点** `-54.0%` ｜ **高于低点** `+5.1%`
+> 🎲 **20日风险**：MAX `+11.74%` ｜ 波动σ `3.75%` ｜ 归一跌幅 z `1.42` ｜ Amihud(×1e8) `1.47`
+> ⭐ **综合评分**：**5.47**
+
+---
+
+### 22. `06651` 五一视界
+> 💰 **最新现价**：`56.4 HKD` ｜ **总市值**：`236.58 亿 HKD`
+> 📊 **估值指标**：**PE** `-` ｜ **PB** `28.47x`
+> 🏢 **所属行业**：Software—Application
+> 📉 **三日信号**：**T-2** `-5.44%` ｜ **T-1** `+1.37%` ｜ **T** `-4.41%` ｜ **最大跌幅** `−5.44%`
+> 💵 **成交活跃度**：今日成交额 `HK$54.75m` ｜ 20 日中位数 `HK$132.50m` ｜ 基准比 `0.41x`
+> 📈 **量能**：今日成交量 `947,525 股` ｜ 近 20 日中位数的 `0.46x`
+> 🔍 **新闻核实**：✅ 已核实，48 小时内无风险关键词
+> 📊 **52周区间**：高 `147` ｜ 低 `35` ｜ **现价距高点** `-61.6%` ｜ **高于低点** `+61.1%`
+> 🎲 **20日风险**：MAX `+6.08%` ｜ 波动σ `3.98%` ｜ 归一跌幅 z `1.23` ｜ Amihud(×1e8) `1.82`
+> ⭐ **综合评分**：**5.44**
+
+---
+
+### 23. `02631` 天岳先进
+> 💰 **最新现价**：`58.9 HKD` ｜ **总市值**：`285.44 亿 HKD`
+> 📊 **估值指标**：**PE** `-` ｜ **PB** `3.62x`
+> 🏢 **所属行业**：半导体设备与材料
+> 📉 **三日信号**：**T-2** `-5.38%` ｜ **T-1** `-2.36%` ｜ **T** `-1.92%` ｜ **最大跌幅** `−5.38%`
+> 💵 **成交活跃度**：今日成交额 `HK$57.92m` ｜ 20 日中位数 `HK$108.80m` ｜ 基准比 `0.53x`
+> 📈 **量能**：今日成交量 `975,000 股` ｜ 近 20 日中位数的 `0.59x`
+> 🔍 **新闻核实**：✅ 已核实，48 小时内无风险关键词
+> 📊 **52周区间**：高 `138.7` ｜ 低 `43.22` ｜ **现价距高点** `-57.5%` ｜ **高于低点** `+36.3%`
+> 🎲 **20日风险**：MAX `+4.57%` ｜ 波动σ `4.02%` ｜ 归一跌幅 z `1.39` ｜ Amihud(×1e8) `2.71`
+> ⭐ **综合评分**：**5.38**
+
+---
+
+### 24. `06682` 范式智能
+> 💰 **最新现价**：`25.5 HKD` ｜ **总市值**：`142.04 亿 HKD`
+> 📊 **估值指标**：**PE** `70.8x` ｜ **PB** `1.34x`
+> 🏢 **所属行业**：Software—Infrastructure
+> 📉 **三日信号**：**T-2** `-5.27%` ｜ **T-1** `-1.41%` ｜ **T** `-3.99%` ｜ **最大跌幅** `−5.27%`
+> 💵 **成交活跃度**：今日成交额 `HK$95.58m` ｜ 20 日中位数 `HK$129.76m` ｜ 基准比 `0.74x`
+> 📈 **量能**：今日成交量 `3,693,700 股` ｜ 近 20 日中位数的 `0.80x`
+> 🔍 **新闻核实**：✅ 已核实，48 小时内无风险关键词
+> 📊 **52周区间**：高 `70` ｜ 低 `23.7` ｜ **现价距高点** `-63.6%` ｜ **高于低点** `+7.6%`
+> 🎲 **20日风险**：MAX `+14.66%` ｜ 波动σ `4.97%` ｜ 归一跌幅 z `1.24` ｜ Amihud(×1e8) `2.48`
+> ⭐ **综合评分**：**5.27**
+
+---
+
+### 25. `01918` 融创中国
+> 💰 **最新现价**：`0.54 HKD` ｜ **总市值**：`107.40 亿 HKD`
+> 📊 **估值指标**：**PE** `亏损(<0)` ｜ **PB** `0.26x`
+> 🏢 **所属行业**：Real Estate—Development
+> 📉 **三日信号**：**T-2** `-0.86%` ｜ **T-1** `-5.22%` ｜ **T** `-0.92%` ｜ **最大跌幅** `−5.22%`
+> 💵 **成交活跃度**：今日成交额 `HK$54.72m` ｜ 20 日中位数 `HK$143.00m` ｜ 基准比 `0.38x`
+> 📈 **量能**：今日成交量 `101,033,969 股` ｜ 近 20 日中位数的 `0.41x`
+> 🔍 **新闻核实**：✅ 已核实，48 小时内无风险关键词
+> 📊 **52周区间**：高 `1.91` ｜ 低 `0.51` ｜ **现价距高点** `-71.7%` ｜ **高于低点** `+5.9%`
+> 🎲 **20日风险**：MAX `+14.29%` ｜ 波动σ `5.64%` ｜ 归一跌幅 z `0.72` ｜ Amihud(×1e8) `2.36`
+> ⭐ **综合评分**：**5.22**
+
+---
+
+### 26. `02600` 中国铝业
+> 💰 **最新现价**：`8.145 HKD` ｜ **总市值**：`1461.52 亿 HKD`
+> 📊 **估值指标**：**PE** `6.8x` ｜ **PB** `1.41x`
+> 🏢 **所属行业**：Aluminum
+> 📉 **三日信号**：**T-2** `-1.63%` ｜ **T-1** `-4.68%` ｜ **T** `-2.40%` ｜ **最大跌幅** `−4.68%`
+> 💵 **成交活跃度**：今日成交额 `HK$228.04m` ｜ 20 日中位数 `HK$326.81m` ｜ 基准比 `0.70x`
+> 📈 **量能**：今日成交量 `27,852,057 股` ｜ 近 20 日中位数的 `0.72x`
+> 🔍 **新闻核实**：✅ 已核实，48 小时内无风险关键词
+> 📊 **52周区间**：高 `15.55` ｜ 低 `7.15` ｜ **现价距高点** `-47.6%` ｜ **高于低点** `+13.9%`
+> 🎲 **20日风险**：MAX `+4.58%` ｜ 波动σ `2.51%` ｜ 归一跌幅 z `2.00` ｜ Amihud(×1e8) `0.68`
+> ⭐ **综合评分**：**5.22**
+
+---
+
+### 27. `02432` 越疆
+> 💰 **最新现价**：`20.54 HKD` ｜ **总市值**：`90.37 亿 HKD`
+> 📊 **估值指标**：**PE** `亏损(<0)` ｜ **PB** `3.02x`
+> 🏢 **所属行业**：专用工业机械
+> 📉 **三日信号**：**T-2** `-5.17%` ｜ **T-1** `-2.86%` ｜ **T** `-2.38%` ｜ **最大跌幅** `−5.17%`
+> 💵 **成交活跃度**：今日成交额 `HK$23.31m` ｜ 20 日中位数 `HK$64.38m` ｜ 基准比 `0.36x`
+> 📈 **量能**：今日成交量 `1,127,026 股` ｜ 近 20 日中位数的 `0.40x`
+> 🔍 **新闻核实**：✅ 已核实，48 小时内无风险关键词
+> 📊 **52周区间**：高 `64.5` ｜ 低 `20.16` ｜ **现价距高点** `-68.2%` ｜ **高于低点** `+1.9%`
+> 🎲 **20日风险**：MAX `+6.92%` ｜ 波动σ `4.17%` ｜ 归一跌幅 z `1.44` ｜ Amihud(×1e8) `3.97`
+> ⭐ **综合评分**：**5.17**
+
+---
+
+### 28. `03296` 华勤技术
+> 💰 **最新现价**：`67.5 HKD` ｜ **总市值**：`1023.49 亿 HKD`
+> 📊 **估值指标**：**PE** `16.8x` ｜ **PB** `3.17x`
+> 🏢 **所属行业**：消费电子产品
+> 📉 **三日信号**：**T-2** `-2.82%` ｜ **T-1** `-1.80%` ｜ **T** `-5.00%` ｜ **最大跌幅** `−5.00%`
+> 💵 **成交活跃度**：今日成交额 `HK$60.12m` ｜ 20 日中位数 `HK$66.42m` ｜ 基准比 `0.91x`
+> 📈 **量能**：今日成交量 `876,040 股` ｜ 近 20 日中位数的 `0.97x`
+> 🔍 **新闻核实**：✅ 已核实，48 小时内无风险关键词
+> 📊 **52周区间**：高 `101` ｜ 低 `57.05` ｜ **现价距高点** `-33.2%` ｜ **高于低点** `+18.3%`
+> 🎲 **20日风险**：MAX `+5.10%` ｜ 波动σ `3.40%` ｜ 归一跌幅 z `1.63` ｜ Amihud(×1e8) `4.42`
+> ⭐ **综合评分**：**5.00**
+
+---
+
+### 29. `01989` 广合科技
+> 💰 **最新现价**：`118.7 HKD` ｜ **总市值**：`561.12 亿 HKD`
+> 📊 **估值指标**：**PE** `30.2x` ｜ **PB** `10.86x`
+> 🏢 **所属行业**：电子元器件
+> 📉 **三日信号**：**T-2** `+0.31%` ｜ **T-1** `-2.50%` ｜ **T** `-4.89%` ｜ **最大跌幅** `−4.89%`
+> 💵 **成交活跃度**：今日成交额 `HK$86.19m` ｜ 20 日中位数 `HK$145.76m` ｜ 基准比 `0.59x`
+> 📈 **量能**：今日成交量 `709,900 股` ｜ 近 20 日中位数的 `0.62x`
+> 🔍 **新闻核实**：✅ 已核实，48 小时内无风险关键词
+> 📊 **52周区间**：高 `222` ｜ 低 `79.95` ｜ **现价距高点** `-46.5%` ｜ **高于低点** `+48.5%`
+> 🎲 **20日风险**：MAX `+14.68%` ｜ 波动σ `5.54%` ｜ 归一跌幅 z `0.74` ｜ Amihud(×1e8) `2.40`
+> ⭐ **综合评分**：**4.89**
+
+---
+
+### 30. `00975` MONGOL MINING
+> 💰 **最新现价**：`9.265 HKD` ｜ **总市值**：`95.04 亿 HKD`
+> 📊 **估值指标**：**PE** `10.4x` ｜ **PB** `0.93x`
+> 🏢 **所属行业**：Coking Coal
+> 📉 **三日信号**：**T-2** `-4.86%` ｜ **T-1** `-0.31%` ｜ **T** `-4.04%` ｜ **最大跌幅** `−4.86%`
+> 💵 **成交活跃度**：今日成交额 `HK$17.97m` ｜ 20 日中位数 `HK$74.88m` ｜ 基准比 `0.24x`
+> 📈 **量能**：今日成交量 `1,923,000 股` ｜ 近 20 日中位数的 `0.26x`
+> 🔍 **新闻核实**：✅ 已核实，48 小时内无风险关键词
+> 📊 **52周区间**：高 `14.58` ｜ 低 `5.81` ｜ **现价距高点** `-36.5%` ｜ **高于低点** `+59.5%`
+> 🎲 **20日风险**：MAX `+8.63%` ｜ 波动σ `3.66%` ｜ 归一跌幅 z `1.45` ｜ Amihud(×1e8) `4.24`
+> ⭐ **综合评分**：**4.86**
+
+---
+
+### 31. `00340` 潼关黄金
+> 💰 **最新现价**：`2.815 HKD` ｜ **总市值**：`149.27 亿 HKD`
+> 📊 **估值指标**：**PE** `14.1x` ｜ **PB** `3.07x`
+> 🏢 **所属行业**：黄金与贵金属
+> 📉 **三日信号**：**T-2** `-3.88%` ｜ **T-1** `-0.51%` ｜ **T** `-4.74%` ｜ **最大跌幅** `−4.74%`
+> 💵 **成交活跃度**：今日成交额 `HK$63.74m` ｜ 20 日中位数 `HK$85.54m` ｜ 基准比 `0.75x`
+> 📈 **量能**：今日成交量 `22,022,000 股` ｜ 近 20 日中位数的 `0.87x`
+> 🔍 **新闻核实**：✅ 已核实，48 小时内无风险关键词
+> 📊 **52周区间**：高 `4.14` ｜ 低 `1.66` ｜ **现价距高点** `-32.0%` ｜ **高于低点** `+69.6%`
+> 🎲 **20日风险**：MAX `+10.23%` ｜ 波动σ `5.10%` ｜ 归一跌幅 z `1.03` ｜ Amihud(×1e8) `4.94`
+> ⭐ **综合评分**：**4.74**
+
+---
+
+### 32. `03800` 协鑫科技
+> 💰 **最新现价**：`0.71 HKD` ｜ **总市值**：`224.67 亿 HKD`
+> 📊 **估值指标**：**PE** `11.6x` ｜ **PB** `0.54x`
+> 🏢 **所属行业**：光伏太阳能
+> 📉 **三日信号**：**T-2** `-4.70%` ｜ **T-1** `-0.70%` ｜ **T** `+0.71%` ｜ **最大跌幅** `−4.70%`
+> 💵 **成交活跃度**：今日成交额 `HK$93.78m` ｜ 20 日中位数 `HK$169.21m` ｜ 基准比 `0.55x`
+> 📈 **量能**：今日成交量 `131,372,000 股` ｜ 近 20 日中位数的 `0.56x`
+> 🔍 **新闻核实**：✅ 已核实，48 小时内无风险关键词
+> 📊 **52周区间**：高 `1.51` ｜ 低 `0.55` ｜ **现价距高点** `-53.0%` ｜ **高于低点** `+29.1%`
+> 🎲 **20日风险**：MAX `+6.04%` ｜ 波动σ `4.13%` ｜ 归一跌幅 z `0.66` ｜ Amihud(×1e8) `1.67`
+> ⭐ **综合评分**：**4.70**
+
+---
+
+### 33. `01258` 中国有色矿业
+> 💰 **最新现价**：`15.84 HKD` ｜ **总市值**：`618.08 亿 HKD`
+> 📊 **估值指标**：**PE** `13.7x` ｜ **PB** `2.86x`
+> 🏢 **所属行业**：Copper
+> 📉 **三日信号**：**T-2** `-2.43%` ｜ **T-1** `-4.51%` ｜ **T** `-4.00%` ｜ **最大跌幅** `−4.51%`
+> 💵 **成交活跃度**：今日成交额 `HK$114.91m` ｜ 20 日中位数 `HK$185.68m` ｜ 基准比 `0.62x`
+> 📈 **量能**：今日成交量 `7,201,997 股` ｜ 近 20 日中位数的 `0.63x`
+> 🔍 **新闻核实**：✅ 已核实，48 小时内无风险关键词
+> 📊 **52周区间**：高 `19.05` ｜ 低 `10.31` ｜ **现价距高点** `-16.9%` ｜ **高于低点** `+53.6%`
+> 🎲 **20日风险**：MAX `+9.90%` ｜ 波动σ `4.09%` ｜ 归一跌幅 z `1.54` ｜ Amihud(×1e8) `1.46`
+> ⭐ **综合评分**：**4.51**
+
+---
+
+> 💡 **PE / PB 极速参考**：
+> • **PE(市盈率-回本年限)**：<10 极便宜(黄金坑)；15~25 正常；>50 偏贵；<0 亏损避雷。
+> • **PB(市净率-家底折扣)**：<1.0 破净(打折甩卖)；1~3 正常；>5 偏贵(轻资产除外)。
+
+> ⚠️ *风险提示：以上结果基于量化技术面及 48 小时舆情排雷初筛，不构成投资建议。*
+  </script>
+
+  <script>
+    // Parser Logic
+    // 「🧊 已趋于平稳推荐（规则…）」→「已趋于平稳推荐」：去掉开头 emoji 和括号里的规则。
+    function groupLabel(heading) {
+      return heading
+        .replace(/^##\s*/, '')
+        .replace(/^[^\p{L}\p{N}]+/u, '')
+        .split('（')[0]
+        .trim();
+    }
+
+    function parseData(md) {
+      const stocks = [];
+      // 卡片分组 = 它上方最近的一个 `## ` 标题。只影响展示，顺序仍按 markdown 原样。
+      const blocks = [];
+      let group = '';
+      for (const line of md.split('\n')) {
+        if (line.startsWith('## ')) {
+          group = groupLabel(line);
+        } else if (line.startsWith('### ')) {
+          blocks.push({ group, lines: [line.slice(4)] });
+        } else if (blocks.length > 0) {
+          blocks[blocks.length - 1].lines.push(line);
+        }
+      }
+
+      for (const block of blocks) {
+        const lines = block.lines.map(l => l.trim()).filter(l => l);
+        if (lines.length === 0) continue;
+
+        const titleLine = lines[0];
+        const idMatch = titleLine.match(/(\d+)\.\s+`?([A-Za-z0-9._-]+)`?/);
+        if (!idMatch) continue;
+        
+        const id = idMatch[1];
+        const ticker = idMatch[2];
+        
+        let industry = '', price = '', volume = '', turnover = '', volRatio = '', volAnomaly = '';
+        let todayChange = '', dropIntensity = '', marketCap = '', pe = '', pb = '', score = '';
+
+        for (const line of lines.slice(1)) {
+          if (line.includes('基础：')) {
+            const match = line.match(/行业：(.*?)$/);
+            if (match) industry = match[1].trim();
+          }
+          if (line.includes('所属行业')) {
+            const match = line.match(/所属行业.*?：(.+)$/);
+            if (match) industry = match[1].trim();
+          }
+          if (line.includes('行情与成交：')) {
+            const pMatch = line.match(/收盘价 \`(.*?)\`/);
+            if (pMatch) price = pMatch[1];
+            const vMatch = line.match(/成交量 \`(.*?)\`/);
+            if (vMatch) volume = vMatch[1];
+            const tMatch = line.match(/成交额 \`(.*?)\`/);
+            if (tMatch) turnover = tMatch[1];
+          }
+          if (line.includes('最新现价')) {
+            const pMatch = line.match(/最新现价.*?\`(.*?)\`/);
+            if (pMatch) price = pMatch[1];
+            const mMatch = line.match(/总市值.*?\`(.*?)\`/);
+            if (mMatch) marketCap = mMatch[1];
+          }
+          if (line.includes('成交活跃度')) {
+            const tMatch = line.match(/今日成交额\s*\`(.*?)\`/);
+            if (tMatch) turnover = tMatch[1];
+          }
+          if (line.includes('量价特征：')) {
+            const vrMatch = line.match(/量比 \`(.*?)\`/);
+            if (vrMatch) volRatio = vrMatch[1];
+            const vaMatch = line.match(/量能异常 \`(.*?)\`/);
+            if (vaMatch) volAnomaly = vaMatch[1];
+          }
+          if (line.includes('量能') && !line.includes('量价特征')) {
+            const values = [...line.matchAll(/\`(.*?)\`/g)].map(match => match[1]);
+            if (values.length > 0 && line.includes('今日成交量')) volume = values[0];
+            if (values.length > 0 && line.includes('近 20 日中位数')) volRatio = values[values.length - 1];
+          }
+          if (line.includes('三日走势：')) {
+            const cMatch = line.match(/今日 \`(.*?)\`/);
+            if (cMatch) todayChange = cMatch[1];
+            const dMatch = line.match(/跌幅强度 \`(.*?)\`/);
+            if (dMatch) dropIntensity = dMatch[1];
+          }
+          if (line.includes('三日信号') || line.includes('四日信号') || line.includes('两日涨跌')) {
+            const todayMatch = line.match(/(?:\*\*T\*\*|今日(?:\(T\))?)\s*\`(.*?)\`/);
+            if (todayMatch) todayChange = todayMatch[1];
+            const dMatch = line.match(/最大跌幅\s*\`(.*?)\`/);
+            if (dMatch) dropIntensity = dMatch[1];
+          }
+          if (line.includes('估值：')) {
+            const mMatch = line.match(/总市值 \`(.*?)\`/);
+            if (mMatch) marketCap = mMatch[1];
+            const peMatch = line.match(/PE \`(.*?)\`/);
+            if (peMatch) pe = peMatch[1];
+            const pbMatch = line.match(/PB \`(.*?)\`/);
+            if (pbMatch) pb = pbMatch[1];
+          }
+          if (line.includes('估值指标')) {
+            const peMatch = line.match(/PE\s*\`(.*?)\`/);
+            if (peMatch) pe = peMatch[1];
+            const pbMatch = line.match(/PB\s*\`(.*?)\`/);
+            if (pbMatch) pb = pbMatch[1];
+          }
+          if (line.includes('策略校验：')) {
+            const sMatch = line.match(/综合评分 \`(.*?)\`/);
+            if (sMatch) score = sMatch[1];
+          }
+          if (line.includes('综合评分')) {
+            const sMatch = line.match(/综合评分\*\*：\*\*(.*?)\*\*/);
+            if (sMatch) score = sMatch[1];
+          }
+        }
+        
+        stocks.push({
+          id, ticker, group: block.group, industry, price, volume, turnover, volRatio, volAnomaly,
+          todayChange, dropIntensity, marketCap, pe, pb, score,
+          rawLines: lines.slice(1)
+        });
+      }
+      return stocks;
+    }
+
+    let allStocks = [];
+
+    // Renderer Logic
+    function renderCards(data) {
+      const container = document.getElementById('list-container');
+      const countBadge = document.getElementById('count-badge');
+      
+      container.innerHTML = '';
+      countBadge.innerText = `${data.length} 个结果`;
+      
+      if (data.length === 0) {
+        container.innerHTML = `
+          <div class="text-center py-24 fade-in flex flex-col items-center justify-center">
+            <div class="w-16 h-16 rounded-full bg-white border border-zinc-200/60 shadow-sm flex items-center justify-center mb-4">
+              <i data-lucide="search-X" class="w-6 h-6 text-zinc-300"></i>
+            </div>
+            <p class="text-zinc-900 font-bold text-lg">没有找到结果</p>
+            <p class="text-zinc-400 text-sm font-medium mt-1">请尝试搜索其他股票代码</p>
+          </div>
+        `;
+        lucide.createIcons();
+        return;
+      }
+
+      data.forEach((stock, index) => {
+        // Aesthetic calculations
+        const isPositive = !stock.todayChange.startsWith('-');
+        const changeColor = isPositive ? 'text-emerald-700' : 'text-rose-700';
+        const changeBg = isPositive ? 'bg-emerald-50 border-emerald-100/60' : 'bg-rose-50 border-rose-100/60';
+        
+        // 将 Markdown 明细转换为安全、易读的中文分行信息
+        const escapeHtml = value => String(value).replace(/[&<>"']/g, char => ({
+          '&': '&amp;',
+          '<': '&lt;',
+          '>': '&gt;',
+          '"': '&quot;',
+          "'": '&#39;'
+        }[char]));
+        const formatDetailLine = line => {
+          const cleanText = line
+            .replace(/^\s*[-*>]\s*/, '')
+            .replace(/^[^\p{L}\p{N}]+/u, '')
+            .replace(/\*\*/g, '')
+            .replace(/`/g, '')
+            .trim();
+          return cleanText.split(/\s*｜\s*/).map(segment => {
+            const separator = segment.indexOf('：');
+            const label = separator >= 0 ? segment.slice(0, separator).trim() : '';
+            const value = separator >= 0 ? segment.slice(separator + 1).trim() : segment;
+            if (!label) return `<p class="text-[13px] leading-relaxed text-zinc-500 font-medium">${escapeHtml(value)}</p>`;
+            return `
+              <div class="flex items-start justify-between gap-3 px-3 py-1.5 rounded-lg bg-zinc-50/70">
+                <span class="text-[12px] leading-relaxed text-zinc-500 font-semibold shrink-0">${escapeHtml(label)}</span>
+                <span class="text-[13px] leading-relaxed text-zinc-900 font-medium text-right break-words">${escapeHtml(value)}</span>
+              </div>
+            `;
+          }).join('');
+        };
+        const rawHtml = stock.rawLines.map(line => {
+          const cleanText = line.replace(/\*\*/g, '').replace(/`/g, '');
+          const isHighlight = cleanText.includes('大跌条件') || cleanText.includes('综合评分') || cleanText.includes('今日');
+          const detailClass = isHighlight ? 'p-2 rounded-xl bg-zinc-50 border border-zinc-100' : 'px-0';
+          return `<div class="${detailClass} flex flex-col gap-1">${formatDetailLine(line)}</div>`;
+        }).join('<div class="h-2"></div>');
+
+        // Card Container
+        const card = document.createElement('div');
+        // Staggered entrance
+        card.style.animationDelay = `${index * 0.05}s`;
+        card.className = "fade-in bg-white rounded-[24px] p-5 shadow-[0_2px_12px_-4px_rgba(0,0,0,0.03)] border border-zinc-200/70 flex flex-col";
+        
+        card.innerHTML = `
+          <!-- Top Row -->
+          <div class="flex justify-between items-start">
+            <div class="flex flex-col gap-1.5">
+              <div class="flex items-center gap-2.5 flex-wrap">
+                <h2 class="text-2xl font-extrabold text-zinc-950 tracking-tight leading-none">${stock.ticker}</h2>
+                <span class="font-mono text-[10px] font-bold text-zinc-500 bg-zinc-100 px-2 py-1 rounded-md leading-none border border-zinc-200/50">#${stock.id}</span>
+                ${stock.group ? `<span class="self-start text-[10px] font-bold text-sky-700 bg-sky-50 px-2 py-1 rounded-md leading-none border border-sky-100">${escapeHtml(stock.group)}</span>` : ''}
+              </div>
+              <p class="text-xs text-zinc-400 font-semibold truncate max-w-[200px]">${stock.industry}</p>
+            </div>
+            
+            <div class="flex flex-col items-end gap-1.5">
+              <div class="bg-zinc-900 text-white font-mono font-bold text-[15px] px-3 py-1.5 rounded-lg leading-none shadow-sm">
+                ${stock.score}
+              </div>
+              <span class="text-[9px] text-zinc-400 font-extrabold uppercase tracking-[0.2em] leading-none">评分</span>
+            </div>
+          </div>
+          
+          <!-- Metrics Grid -->
+          <div class="mt-6 grid grid-cols-2 gap-y-5 gap-x-4">
+            <div class="flex flex-col gap-1.5">
+              <span class="text-[10px] text-zinc-400 font-extrabold uppercase tracking-widest leading-none">最新价</span>
+              <div class="flex items-center gap-2">
+                <span class="font-mono font-bold text-zinc-900 text-[15px] leading-none">${stock.price}</span>
+                <span class="font-mono text-[10px] font-bold px-1.5 py-0.5 rounded border ${changeColor} ${changeBg} leading-none">${stock.todayChange}</span>
+              </div>
+            </div>
+            <div class="flex flex-col gap-1.5">
+              <span class="text-[10px] text-zinc-400 font-extrabold uppercase tracking-widest leading-none">量比</span>
+              <div class="flex items-center gap-1.5">
+                <i data-lucide="bar-chart-2" class="w-3.5 h-3.5 text-zinc-300"></i>
+                <span class="font-mono font-bold text-zinc-900 text-[15px] leading-none">${stock.volRatio}</span>
+              </div>
+            </div>
+            <div class="flex flex-col gap-1.5">
+              <span class="text-[10px] text-zinc-400 font-extrabold uppercase tracking-widest leading-none">成交额</span>
+              <span class="font-mono font-bold text-zinc-900 text-[15px] leading-none">${stock.turnover}</span>
+            </div>
+            <div class="flex flex-col gap-1.5">
+              <span class="text-[10px] text-zinc-400 font-extrabold uppercase tracking-widest leading-none">总市值</span>
+              <span class="font-mono font-bold text-zinc-900 text-[15px] leading-none">${stock.marketCap}</span>
+            </div>
+          </div>
+          
+          <!-- Expand Divider & Button -->
+          <div class="mt-6 pt-1 border-t border-zinc-100 border-dashed">
+            <button class="expand-btn w-full flex items-center justify-between text-[11px] font-bold text-zinc-400 uppercase tracking-widest py-3 hover:text-zinc-900 transition-colors active:scale-[0.98] outline-none">
+              <span>查看数据</span>
+              <i data-lucide="plus" class="w-4 h-4 transition-transform duration-300"></i>
+            </button>
+            
+            <!-- Accordion Details -->
+            <div class="accordion-content">
+              <div class="accordion-inner">
+                <div class="pb-2 pt-1 flex flex-col gap-1">
+                  ${rawHtml}
+                </div>
+              </div>
+            </div>
+          </div>
+        `;
+        
+        // Attach Interaction
+        const expandBtn = card.querySelector('.expand-btn');
+        const detailsPanel = card.querySelector('.accordion-content');
+        const icon = expandBtn.querySelector('i');
+        
+        expandBtn.addEventListener('click', () => {
+          const isOpen = detailsPanel.classList.contains('open');
+          if (isOpen) {
+            detailsPanel.classList.remove('open');
+            icon.style.transform = 'rotate(0deg)';
+          } else {
+            detailsPanel.classList.add('open');
+            icon.style.transform = 'rotate(45deg)';
+          }
+        });
+
+        container.appendChild(card);
+      });
+      
+      lucide.createIcons();
+    }
+
+    // Initialization
+    document.addEventListener('DOMContentLoaded', () => {
+      // 1. Fetch & Parse
+      const rawMarkdown = document.getElementById('raw-data').textContent;
+      allStocks = parseData(rawMarkdown);
+      
+      // 2. Initial Render
+      renderCards(allStocks);
+
+      // 3. Search Filter
+      const searchInput = document.getElementById('search-input');
+      searchInput.addEventListener('input', (e) => {
+        const query = e.target.value.toLowerCase();
+        const filtered = allStocks.filter(stock =>
+          stock.ticker.toLowerCase().includes(query) ||
+          stock.industry.toLowerCase().includes(query) ||
+          stock.group.toLowerCase().includes(query)
+        );
+        renderCards(filtered);
+      });
+    });
+  </script>
+</body>
+</html>
