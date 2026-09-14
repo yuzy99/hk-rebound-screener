@@ -102,8 +102,10 @@ jobs:
           git diff --cached --quiet && { echo "报告无变化"; exit 0; }
           git commit -m "chore(report): publish US tier reports $(TZ=Asia/Hong_Kong date +%F) [skip ci]"
           for i in 1 2 3 4 5; do
-            git push origin HEAD:main && exit 0
-            echo "推送被拒，rebase 重试 ($i)"; git pull --rebase origin main || true
+            # 推回本次运行的分支，而不是写死 main：在 main 上跑时两者相同，
+            # 在 test 等分支上跑时不会把实验代码顺带快进到 main。
+            git push origin "HEAD:${GITHUB_REF_NAME}" && exit 0
+            echo "推送被拒，rebase 重试 ($i)"; git pull --rebase "origin ${GITHUB_REF_NAME}" || true
           done
           echo "WARN: 报告推送失败，本次部署可能不含最新报告"
 
