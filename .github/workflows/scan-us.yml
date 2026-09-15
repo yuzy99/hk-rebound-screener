@@ -92,15 +92,26 @@ jobs:
           fi
           python -m hk_rebound_screener.main "${args[@]}"
 
-      - name: Commit published reports
+      - name: Append scan snapshot to signal ledger
+        # 台账是观测层：把当天快照追加进 data/ledger/，并给已能结算的信号补上
+        # T+1..T+5 收益。少了这一步，扫描结果就只是 artifact——14 天后过期，
+        # 永远攒不出能复盘的面板。失败不该挡住报告发布，但要在日志里看得见。
+        continue-on-error: true
+        env:
+          PYTHONPATH: src
+        run: |
+          python scripts/ledger_append.py
+          python scripts/ledger_settle.py
+
+      - name: Commit published reports and signal ledger
         continue-on-error: true        # 推送撞车绝不能挡住部署和通知
         run: |
           set -uo pipefail
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add reports/
+          git add reports/ data/ledger/
           git diff --cached --quiet && { echo "报告无变化"; exit 0; }
-          git commit -m "chore(report): publish US tier reports $(TZ=Asia/Hong_Kong date +%F) [skip ci]"
+          git commit -m "chore(report): publish US tier reports and signal ledger $(TZ=Asia/Hong_Kong date +%F) [skip ci]"
           for i in 1 2 3 4 5; do
             # 推回本次运行的分支，而不是写死 main：在 main 上跑时两者相同，
             # 在 test 等分支上跑时不会把实验代码顺带快进到 main。
