@@ -1,18 +1,18 @@
 {
   "market": "HK",
-  "asof": "2026-09-14",
+  "asof": "2026-09-15",
   "tiers": [
     {
       "label": "200M",
       "slug": "200m",
-      "csv": "outputs/scan_hk_two_day_drop_200m_2026-09-14.csv",
-      "count": 10
+      "csv": "outputs/scan_hk_two_day_drop_200m_2026-09-15.csv",
+      "count": 11
     },
     {
       "label": "50M",
       "slug": "50m",
-      "csv": "outputs/scan_hk_two_day_drop_50m_2026-09-14.csv",
-      "count": 33
+      "csv": "outputs/scan_hk_two_day_drop_50m_2026-09-15.csv",
+      "count": 25
     }
   ]
 }
