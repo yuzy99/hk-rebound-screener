@@ -1,25 +1,25 @@
 {
   "market": "US",
-  "asof": "2026-09-14",
+  "asof": "2026-09-15",
   "tiers": [
     {
       "label": "200M",
       "slug": "200m",
-      "csv": "outputs/scan_us_two_day_drop_200m_2026-09-14.csv",
-      "count": 32
+      "csv": "outputs/scan_us_two_day_drop_200m_2026-09-15.csv",
+      "count": 0
     },
     {
       "label": "50M",
       "slug": "50m",
-      "csv": "outputs/scan_us_two_day_drop_50m_2026-09-14.csv",
-      "count": 67
+      "csv": "outputs/scan_us_two_day_drop_50m_2026-09-15.csv",
+      "count": 0
     }
   ],
   "stable": {
     "label": "已趋于平稳",
     "rules": "T-1/T-2/T-3 至少一日跌幅 ≤ -4.5%；T 日 > -4.5%；T 至 T-3 四日涨幅均 ≤ +1%",
-    "csv": "outputs/scan_us_two_day_drop_stable_2026-09-14.csv",
-    "count": 13,
+    "csv": "outputs/scan_us_two_day_drop_stable_2026-09-15.csv",
+    "count": 0,
     "tier_slug": "200m"
   }
 }
