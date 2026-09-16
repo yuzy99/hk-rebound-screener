@@ -367,6 +367,10 @@ def main() -> None:
         tiers_dir = Path(html_dir)
         tiers_dir.mkdir(parents=True, exist_ok=True)
         manifest_tiers: list[dict[str, object]] = []
+        # 「已趋于平稳」只挂在官方门槛那一档的页面上（见下方 manifest["stable"]）。
+        official_threshold = float(
+            (config.get("liquidity_filter") or {}).get("min_prior_median_turnover", 0.0)
+        )
         for tier in tiers:
             threshold = float(tier["min_prior_median_turnover"])
             label = str(tier["label"])
@@ -387,9 +391,10 @@ def main() -> None:
                 asof=asof_text,
                 config=tier_config,
                 tier_label=f"{label} 流动性门槛",
-                # 新规则只算一次，每档页面看到的都是官方门槛那一批，不随档位变。
-                stable_result=result,
-                stable_rules=stable_rules,
+                # 新规则只算一次（不随档位变），且只挂在官方门槛那一档的页面上 ——
+                # 低门槛档不显示，否则会看到一批在自己档位根本不合格的票。
+                stable_result=result if threshold == official_threshold else None,
+                stable_rules=stable_rules if threshold == official_threshold else "",
             )
             write_step_summary(tier_md)
             render_html_report(
@@ -415,9 +420,6 @@ def main() -> None:
         }
         if stable_csv is not None:
             # 新规则挂在官方门槛那一档的页面上，推送脚本靠 tier_slug 找到它的链接。
-            official_threshold = float(
-                (config.get("liquidity_filter") or {}).get("min_prior_median_turnover", 0.0)
-            )
             stable_slug = next(
                 (
                     str(tier["slug"])
