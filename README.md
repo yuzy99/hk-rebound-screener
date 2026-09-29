@@ -109,8 +109,13 @@ live 模式会调用 AKShare 的港股全市场延时快照，再按 `universe.c
 
 仓库内的 `.github/workflows/scan-hk.yml` 和 `.github/workflows/scan-us.yml` 直接调用上面的 `--mode live --full-market` 入口，并固定使用最新港股和美股配置，不再提供旧策略选择。两个 workflow 都支持 Actions 页面上的 **Run workflow** 手动触发，并可选重建行业元数据缓存。
 
-- 港股：工作日 `08:30 UTC`，即北京时间/香港时间 `16:30`，用于港股收市后的全市场扫描。
-- 美股：工作日北京时间 `08:00`（GitHub Actions `00:00 UTC`），周六北京时间 `14:00`（`06:00 UTC`）；workflow 使用 `TZ=Asia/Hong_Kong` 处理运行日志和日期。
+- 港股：工作日 `07:00 UTC`，即北京时间/香港时间 `15:00`，用于港股全市场扫描。
+- 美股：工作日北京时间 `06:30`（GitHub Actions `22:30 UTC`，前一天），周六北京时间 `12:30`（`04:30 UTC`）；workflow 使用 `TZ=Asia/Hong_Kong` 处理运行日志和日期。
+
+> ⚠️ **cron 故意早于本市场收盘时刻，提前量是用来吸收 GitHub 排队延迟的，不要"修正"成收盘后。**
+> GitHub Actions 的 `schedule` 不保证准点。2026-09 连续 8 个交易日实测：港股配 `08:30 UTC` 时实际稳定在 `13:05~16:57 UTC` 才启动（晚 4.6~8.4 小时），美股配 `00:00 UTC` 时实际稳定在 `01:51~02:11 UTC`（晚约 2 小时）。推送步骤排在 workflow 最末（扫描 → 提交报告 → 同步 main → 部署 Pages → 推送），排队延迟会 1:1 地变成你收到消息的时间。
+> 把 cron 前移后，**扫描用的日期不会跟着变错**：`--asof` 不传时取行情数据的最后交易日（`main.py` 的 `live_asof`），不取系统时间。所以排队不足时最多退到上一个完整收盘日，不会把盘中价当收盘价；而排队补足后反而能拿到当天收盘。
+> 若哪天 GitHub 排队明显好转，想把时间改回"收盘后立刻跑"，请连同本条实测一起复核再改。
 - 依赖从 `requirements.txt` 安装；扫描产生的 `outputs/*.csv` 会作为 Actions artifact 保存 14 天。
 - **报告页面自动回提交**：两个 workflow 在扫描后把 `reports/*.html` 提交回 `main`（`contents: write` + `fetch-depth: 0`），部署前再和 `origin/main` 同步一次。这不是可选项 —— `upload-pages-artifact` + `path: ./reports` 每次部署**整体替换站点**，只有提交进仓库的页面才扛得住另一次部署。2026-09-11 实测 `us_latest.html` 就是这样被每天 16:30 的港股任务抹成 404 的。
   > 前提是仓库 **Settings → Actions → General → Workflow permissions** 设为 **Read and write**；只读会让 `contents: write` 被降级、`git push` 直接 403（推送步骤标了 `continue-on-error`，失败只告警，不会挡住部署和通知）。

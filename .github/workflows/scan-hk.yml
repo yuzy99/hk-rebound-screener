@@ -3,10 +3,13 @@
 run-name: HK full-market scan and report (${{ github.event_name }})
 
 on:
-  # GitHub Actions cron uses UTC. 08:30 UTC = 16:30 Beijing/Hong Kong time,
-  # after the regular Hong Kong session has closed.
+  # GitHub Actions cron uses UTC. 07:00 UTC = 15:00 Beijing/Hong Kong time.
+  # 港股 16:00 收盘，这里故意早于收盘触发：GitHub 免费调度实测稳定排队 5~8 小时
+  # （见 2026-09 运行记录），准点 08:30 UTC 实际要到当晚 21:30~次日 01:00 才跑完。
+  # 提前量用来吸收排队延迟；扫描日期取自行情数据的最后交易日（main.py live_asof），
+  # 不取系统时间，所以排队不足时只会退到上一完整收盘日，不会把盘中价当收盘价。
   schedule:
-    - cron: "30 8 * * 1-5"
+    - cron: "0 7 * * 1-5"
   workflow_dispatch:
     inputs:
       refresh_metadata:

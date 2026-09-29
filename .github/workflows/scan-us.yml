@@ -4,10 +4,14 @@ run-name: US full-market scan and report (${{ github.event_name }})
 
 on:
   # GitHub Actions cron uses UTC. Beijing/Hong Kong time is UTC+8.
-  # 00:00 UTC is 08:00 on workdays; 06:00 UTC is 14:00 on Saturday.
+  # 22:30 UTC = 次日 06:30 北京（工作日）；04:30 UTC 周六 = 12:30 北京。
+  # 这两条都比"收盘后立刻跑"提前：GitHub 免费调度实测稳定排队约 2 小时
+  # （见 2026-09 运行记录），准点 00:00 UTC 实际 09:50~10:10 北京才推送。
+  # 美股 16:00 ET 收盘 = 04:00/05:00 UTC，原 00:00 UTC 本就早于收盘、
+  # 取的是上一交易日；这里再提前 1.5 小时同样是取上一交易日，语义不变。
   schedule:
-    - cron: "0 0 * * 0-4"
-    - cron: "0 6 * * 6"
+    - cron: "30 22 * * 0-4"
+    - cron: "30 4 * * 6"
   workflow_dispatch:
     inputs:
       refresh_metadata:
