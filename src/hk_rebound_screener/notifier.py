@@ -714,6 +714,53 @@ def write_step_summary(content: str) -> bool:
         return False
 
 
+# PushPlus /send 的同步响应只代表「服务端收到了请求」，投递是异步的：官方文档明说
+# code 200 不代表发送成功，最终结果要用 data 里的消息流水号查询或靠 callbackUrl 回调。
+# 所以必须读响应体里的 code —— 只看 HTTP 200 会让失败静默通过：HTTP 一直是 200，
+# 而 code 可能是 900（请求过多被限）、905（未实名）、500（系统异常）、600（数据异常），
+# 那时微信一条都收不到，日志却印着「发送成功」。2026-10-14 那次就是这样漏掉的。
+PUSHPLUS_RETURN_CODES = {
+    302: "未登录",
+    401: "请求未授权",
+    403: "请求 IP 未授权",
+    500: "系统异常，请稍后再试",
+    600: "数据异常，操作失败",
+    805: "无权查看",
+    888: "积分不足",
+    900: "请求次数过多，账号受限",
+    903: "无效的用户令牌",
+    905: "账户未完成实名认证",
+    999: "服务端验证错误",
+}
+
+
+def _pushplus_accepted(body: str) -> bool:
+    """读 PushPlus 的响应体，判断这次请求有没有被真正受理。
+
+    返回体形如 ``{"code":200,"msg":"请求成功","data":"<消息流水号>"}``。code 不是 200
+    时消息不会发出，必须返回失败；流水号一并打出来，方便按
+    ``https://www.pushplus.plus/shortMessage/<流水号>`` 或开放接口核对投递结果。
+    """
+    try:
+        payload = json.loads(body)
+    except Exception:  # noqa: BLE001 - 非 JSON 响应无法确认受理，按失败处理
+        print(f"WARN PushPlus 响应不是 JSON，无法确认是否受理: {body[:200]}")
+        return False
+    code = payload.get("code")
+    message = str(payload.get("msg", "")).strip()
+    short_code = str(payload.get("data") or "").strip()
+    if code == 200:
+        detail = f"，投递结果按流水号查询（{short_code}）" if short_code else ""
+        print(f"PushPlus 已受理: msg={message or '请求成功'}{detail}")
+        return True
+    try:
+        meaning = PUSHPLUS_RETURN_CODES.get(int(code), "未知返回码")
+    except (TypeError, ValueError):
+        meaning = "返回码缺失或非数字"
+    print(f"WARN PushPlus 受理失败: code={code}（{meaning}）, msg={message}")
+    return False
+
+
 def send_webhook_notification(
     content: str,
     title: str = "选股结果通知",
@@ -746,11 +793,10 @@ def send_webhook_notification(
         }
         try:
             response = requests.post(target_url, json=payload, headers=headers, timeout=15)
-            if response.status_code == 200:
-                print("PushPlus 微信通知发送成功")
-                return True
-            print(f"WARN PushPlus 响应异常: HTTP {response.status_code}, 内容: {response.text[:200]}")
-            return False
+            if response.status_code != 200:
+                print(f"WARN PushPlus 响应异常: HTTP {response.status_code}, 内容: {response.text[:200]}")
+                return False
+            return _pushplus_accepted(response.text)
         except Exception as error:
             print(f"WARN PushPlus 发送失败: {error}")
             return False
