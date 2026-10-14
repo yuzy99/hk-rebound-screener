@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import random
 import time
+from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, timedelta
 from pathlib import Path
@@ -24,6 +25,20 @@ YFINANCE_CHECKPOINT_BATCHES = 10
 YFINANCE_RETRY_DELAYS = (2.0, 5.0, 10.0)
 YFINANCE_CACHE_DIR = Path("data") / "yfinance_cache"
 AKSHARE_HISTORY_CACHE_FILE = Path("data") / "akshare_cache" / "hk_history.csv"
+
+# 拉全市场行情前的「最新交易日是否已落地」探测。
+#
+# 背景：Yahoo 在某个交易日的日线还没汇总完时，会给一行占位数据 —— 日期是当天、收盘价沿用
+# 前一交易日、成交量 0。2026-10-13 美股实测 5,124 只里 4,989 只是这种占位行，而策略的流动性
+# 门槛要求当日成交量 > 0，于是三档名单全被清空、推送成「无命中股票」。花十几分钟下载 5,000 只
+# 之前，先用几个必然每天都有成交的参考标的探一次，就能识别出「当天数据还没出来」。
+DATA_PROBE_SYMBOLS: dict[str, tuple[str, ...]] = {
+    "US": ("AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "JPM", "XOM", "WMT", "SPY"),
+    "HK": ("0700.HK", "0005.HK", "0941.HK", "1299.HK", "0388.HK", "9988.HK", "3690.HK", "0001.HK"),
+}
+# 最新日期上「有真实成交量」的参考标的占比达到这个线，才算当天数据已就绪。留出停牌、
+# 单只标的取不到数的余量，但占位行会让几乎所有参考标的都落空，两者不会混淆。
+DATA_PROBE_READY_SHARE = 0.6
 
 
 def fetch_hkex_security_master(
@@ -1022,6 +1037,115 @@ def _yfinance_news_datetime(value: object) -> pd.Timestamp:
             return pd.NaT
         return stamp.tz_convert("Asia/Hong_Kong").tz_localize(None)
     return _parse_hong_kong_datetime(value)
+
+
+def probe_latest_daily_session(
+    market: str,
+    symbols: Sequence[str] | None = None,
+    lookback_days: int = 12,
+) -> tuple[pd.Timestamp | None, float, int]:
+    """探测最新一个交易日的日线是否已经落地。
+
+    返回 (最新交易日, 该日有真实成交量的参考标的占比, 参考标的数)。占比过低说明 Yahoo 还
+    没把最新交易日汇总完（拿到的只是占位行），此时不该开始拉全市场行情。
+
+    探测走独立的 ``yf.download``，不碰 ``data/yfinance_cache`` 里的批量缓存 —— 探测不该
+    改写正式行情缓存，也不该被缓存里的占位行糊弄过去。
+    """
+    import yfinance as yf
+
+    reference = list(symbols or DATA_PROBE_SYMBOLS.get(market.upper(), DATA_PROBE_SYMBOLS["US"]))
+    total = len(reference)
+    if not reference:
+        return None, 0.0, 0
+    today = date.today()
+    try:
+        frame = yf.download(
+            tickers=reference,
+            start=today - timedelta(days=lookback_days),
+            end=today + timedelta(days=1),
+            interval="1d",
+            auto_adjust=True,
+            actions=False,
+            group_by="ticker",
+            threads=False,
+            timeout=30,
+            progress=False,
+        )
+    except Exception as error:  # noqa: BLE001 - 探测失败按「没就绪」处理，下一轮重试
+        print(f"WARN 行情就绪探测请求失败: {error}", flush=True)
+        return None, 0.0, total
+    if frame is None or frame.empty:
+        return None, 0.0, total
+
+    newest: dict[str, tuple[pd.Timestamp, float]] = {}
+    for symbol in reference:
+        try:
+            subframe = frame[symbol] if isinstance(frame.columns, pd.MultiIndex) else frame
+            subframe = subframe.dropna(subset=["Close", "Volume"])
+            if subframe.empty:
+                continue
+            # _yfinance_local_date 返回的是位置索引（0..n-1），量能同样按位置对齐，
+            # 不要拿它的标签去索引按日期排的 Volume 列。
+            stamps = _yfinance_local_date(subframe.index)
+            volumes = pd.to_numeric(subframe["Volume"], errors="coerce").reset_index(drop=True)
+            position = stamps.idxmax()
+            if pd.isna(position):
+                continue
+            newest[symbol] = (
+                pd.Timestamp(stamps.loc[position]),
+                float(volumes.loc[position]),
+            )
+        except Exception:  # noqa: BLE001 - 单只参考标的取不到不算致命
+            continue
+    if not newest:
+        return None, 0.0, total
+
+    latest = max(stamp for stamp, _ in newest.values())
+    ready = sum(
+        1 for stamp, volume in newest.values() if stamp == latest and volume > 0.0
+    )
+    return latest, ready / total, total
+
+
+def wait_for_daily_data(
+    market: str,
+    max_delays: int = 4,
+    delay_seconds: float = 3600.0,
+    probe: Callable[[], tuple[pd.Timestamp | None, float, int]] | None = None,
+    sleep: Callable[[float], None] = time.sleep,
+) -> pd.Timestamp | None:
+    """正式拉行情前确认最新交易日的数据已经出来，没好就等一轮再测，最多推迟 max_delays 次。
+
+    推迟完还是没就绪就抛 SystemExit：宁可让这次 workflow 明显失败（既不推送空名单，也不把
+    占位日写进台账），也不能像 2026-10-13 那样把「全市场零成交」当成真实交易日，筛出 0 只
+    再推一条空消息 —— 那种失败看起来和「今天真的没有符合的票」完全一样。
+    """
+    probe = probe or (lambda: probe_latest_daily_session(market))
+    attempts = max(0, int(max_delays))
+    for attempt in range(attempts + 1):
+        session, share, total = probe()
+        hit = int(round(share * total))
+        if session is not None and share >= DATA_PROBE_READY_SHARE:
+            print(
+                f"行情数据就绪: 最新交易日 {session.date()}，参考标的 {hit}/{total} 已有真实成交量",
+                flush=True,
+            )
+            return session
+        latest_text = f"{session.date()}" if session is not None else "未知"
+        if attempt >= attempts:
+            raise SystemExit(
+                f"行情数据未就绪: 最新交易日 {latest_text}，参考标的仅 {hit}/{total} 有真实成交量；"
+                f"已推迟 {attempts} 次共 {attempts * delay_seconds / 3600:.0f} 小时仍未等到，本次不扫描。"
+            )
+        print(
+            f"行情数据未就绪: 最新交易日 {latest_text}，参考标的仅 {hit}/{total} 有真实成交量；"
+            f"{delay_seconds / 60:.0f} 分钟后重测（第 {attempt + 1}/{attempts} 次推迟，"
+            f"最多推迟 {attempts * delay_seconds / 3600:.0f} 小时）",
+            flush=True,
+        )
+        sleep(delay_seconds)
+    return None
 
 
 def fetch_yfinance_history(

@@ -19,6 +19,7 @@ from .adapters import (
     fetch_usd_hkd_rate,
     fetch_yfinance_news,
     fetch_yfinance_splits_bulk,
+    wait_for_daily_data,
 )
 from .notifier import (
     format_markdown_report,
@@ -90,6 +91,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--full-market", action="store_true", help="live 模式自动生成普通股全市场代码池")
     parser.add_argument("--refresh-metadata", action="store_true", help="重新抓取全市场行业元数据")
     parser.add_argument("--metadata-cache", default=None, help="全市场行业缓存文件")
+    parser.add_argument(
+        "--data-wait-retries",
+        type=int,
+        default=4,
+        help="live 模式拉行情前，最新交易日数据未就绪时最多推迟的次数（每次 1 小时量级），0 表示不等",
+    )
+    parser.add_argument(
+        "--data-wait-minutes",
+        type=float,
+        default=60.0,
+        help="每次推迟等待的分钟数",
+    )
     parser.add_argument("--output-dir", default=str(ROOT / "outputs"))
     return parser.parse_args()
 
@@ -126,6 +139,17 @@ def main() -> None:
         raise SystemExit("--full-market 只适用于 --mode live")
     if args.full_market and args.limit_codes:
         raise SystemExit("--full-market 不能与 --limit-codes 同时使用")
+    # 美股日线走 yfinance 批量下载，而 Yahoo 在最新交易日还没汇总完时会给占位行
+    # （收盘=前收、成交量 0）。占位行会被当成真实交易日，再被「当日成交量 > 0」的流动性
+    # 门槛清成 0 只 —— 2026-10-13 就是这么推了一条空名单。所以先探一次，没好就等一小时再测。
+    # 港股不做这一步：港股当日价格来自 AKShare 快照且已有完整性校验，而 Yahoo 的港股日线
+    # 本身常年滞后，拿它当就绪判据会误伤本来正常的港股任务。
+    if args.mode == "live" and market == "US" and args.data_wait_retries > 0:
+        wait_for_daily_data(
+            market=market,
+            max_delays=args.data_wait_retries,
+            delay_seconds=args.data_wait_minutes * 60.0,
+        )
     if args.full_market:
         metadata_cache = Path(args.metadata_cache) if args.metadata_cache else ROOT / "data" / "cache" / f"{market.lower()}_industry.csv"
         universe = build_full_universe(

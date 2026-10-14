@@ -37,7 +37,10 @@ env:
 jobs:
   scan:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    # 120 分钟不够：拉行情前会先探测最新交易日是否落地，没好就每小时重测一次、最多推迟
+    # 4 小时（main.py --data-wait-retries 默认 4），再加十几分钟下载与扫描。GitHub 托管
+    # runner 单 job 上限 6 小时，这里留出余量。
+    timeout-minutes: 330
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
